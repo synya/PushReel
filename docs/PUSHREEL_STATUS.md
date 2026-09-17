@@ -60,13 +60,12 @@ Verified on 2026-09-17:
   active Wi-Fi interface; those sockets disappear when discovery is disabled. This
   confirms that the Android Link discovery engine is running and releasing its
   network resources.
-- A first test with Ableton Live on a MacBook on the same Wi-Fi still reported zero
-  standard Link peers. The audio stream is not required for standard Link peer
-  discovery, so the remaining cross-device issue must be checked against Live's Link
-  state, macOS local-network/firewall permissions, and Wi-Fi multicast isolation.
+- Standard Link peer discovery was verified with Ableton Live on a MacBook connected
+  to the same Wi-Fi network. The initial zero-peer result was caused by missing local
+  network access on the MacBook; after correcting that permission, PushReel detected
+  the peer without requiring a Link Audio stream.
 
-Still to verify manually: successful cross-device discovery of the MacBook and a real
-Push 3 peer/channel, Link lifecycle
+Still to verify manually: discovery of a real Push 3 Link Audio channel, Link lifecycle
 across background/foreground transitions, Gallery playback over longer recordings,
 and all future external-audio behavior.
 
