@@ -53,10 +53,20 @@ Verified on 2026-09-17:
   `armeabi-v7a`, `x86`, and `x86_64`.
 - `:linkaudio:testStableDebugUnitTest` completed successfully.
 - On the physical phone, the LINK control is visible, its menu opens, discovery turns
-  on and reports `0 peers · no channels` when no Link Audio source is present, and it
-  turns off cleanly. Logcat showed no JNI loading error, Link exception, or crash.
+  on, and it turns off cleanly. The menu reports standard Link peers separately from
+  advertised Link Audio channels so that a tempo peer is not confused with an audio
+  source. Logcat showed no JNI loading error, Link exception, or crash.
+- While discovery is enabled, the application UID owns UDP port 20808 sockets on the
+  active Wi-Fi interface; those sockets disappear when discovery is disabled. This
+  confirms that the Android Link discovery engine is running and releasing its
+  network resources.
+- A first test with Ableton Live on a MacBook on the same Wi-Fi still reported zero
+  standard Link peers. The audio stream is not required for standard Link peer
+  discovery, so the remaining cross-device issue must be checked against Live's Link
+  state, macOS local-network/firewall permissions, and Wi-Fi multicast isolation.
 
-Still to verify manually: discovery of a real Push 3 peer/channel, Link lifecycle
+Still to verify manually: successful cross-device discovery of the MacBook and a real
+Push 3 peer/channel, Link lifecycle
 across background/foreground transitions, Gallery playback over longer recordings,
 and all future external-audio behavior.
 

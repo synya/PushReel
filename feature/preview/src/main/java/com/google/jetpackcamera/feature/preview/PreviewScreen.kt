@@ -950,14 +950,21 @@ private fun LinkAudioIndicator(
                         when {
                             uiState.error != null -> uiState.error
                             !uiState.requestedEnabled -> "Discovery is off"
-                            uiState.channels.isEmpty() -> "${uiState.peerCount} peers · no channels"
-                            else -> "${uiState.peerCount} peers · ${uiState.channels.size} channels"
+                            !uiState.linkEnabled -> "Starting Link discovery…"
+                            else -> "Link peers: ${uiState.peerCount}"
                         }
                     )
                 },
                 enabled = false,
                 onClick = {}
             )
+            if (uiState.requestedEnabled && uiState.linkEnabled) {
+                DropdownMenuItem(
+                    text = { Text("Link Audio channels: ${uiState.channels.size}") },
+                    enabled = false,
+                    onClick = {}
+                )
+            }
             uiState.channels.forEach { channel ->
                 DropdownMenuItem(
                     text = { Text("${channel.peerName} · ${channel.name}") },
