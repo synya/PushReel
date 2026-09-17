@@ -1,0 +1,1177 @@
+/*
+ * Copyright (C) 2025 The Android Open Source Project
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *      http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+package com.google.jetpackcamera.ui.components.capture
+
+import android.content.ContentResolver
+import android.content.pm.ActivityInfo
+import android.os.Build
+import android.util.Log
+import androidx.annotation.VisibleForTesting
+import androidx.camera.compose.CameraXViewfinder
+import androidx.camera.core.DynamicRange as CXDynamicRange
+import androidx.camera.core.SurfaceRequest
+import androidx.camera.viewfinder.compose.CoordinateTransformer
+import androidx.camera.viewfinder.compose.MutableCoordinateTransformer
+import androidx.camera.viewfinder.core.ImplementationMode
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.EnterTransition
+import androidx.compose.animation.ExitTransition
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.EaseOutExpo
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.snap
+import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.scaleOut
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.gestures.rememberTransformableState
+import androidx.compose.foundation.gestures.transformable
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.defaultMinSize
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.offset
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
+import androidx.compose.material3.FilledIconToggleButton
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.IconButtonDefaults
+import androidx.compose.material3.LocalContentColor
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.SnackbarResult
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.SideEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.draw.rotate
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Matrix
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.boundsInWindow
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalView
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.tooling.preview.Preview
+import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.round
+import androidx.compose.ui.unit.sp
+import com.google.jetpackcamera.core.camera.VideoRecordingState
+import com.google.jetpackcamera.model.CaptureMode
+import com.google.jetpackcamera.model.StabilizationMode
+import com.google.jetpackcamera.model.VideoQuality
+import com.google.jetpackcamera.ui.controller.SnackBarController
+import com.google.jetpackcamera.ui.uistate.DisableRationale
+import com.google.jetpackcamera.ui.uistate.SingleSelectableUiState
+import com.google.jetpackcamera.ui.uistate.SnackbarData
+import com.google.jetpackcamera.ui.uistate.capture.AspectRatioUiState
+import com.google.jetpackcamera.ui.uistate.capture.AudioUiState
+import com.google.jetpackcamera.ui.uistate.capture.CaptureButtonUiState
+import com.google.jetpackcamera.ui.uistate.capture.CaptureModeToggleUiState
+import com.google.jetpackcamera.ui.uistate.capture.CaptureModeToggleUiState.Unavailable.findSelectableStateFor
+import com.google.jetpackcamera.ui.uistate.capture.CaptureModeToggleUiState.Unavailable.isCaptureModeSelectable
+import com.google.jetpackcamera.ui.uistate.capture.ElapsedTimeUiState
+import com.google.jetpackcamera.ui.uistate.capture.FlipLensUiState
+import com.google.jetpackcamera.ui.uistate.capture.FocusMeteringUiState
+import com.google.jetpackcamera.ui.uistate.capture.StabilizationUiState
+import com.google.jetpackcamera.ui.uistate.capture.compound.PreviewDisplayUiState
+import kotlin.time.Duration.Companion.nanoseconds
+import kotlin.time.Duration.Companion.seconds
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.onCompletion
+
+private const val TAG = "PreviewScreen"
+private const val BLINK_TIME = 100L
+private val TAP_TO_FOCUS_INDICATOR_SIZE = 56.dp
+private const val FOCUS_INDICATOR_FAILURE_DELAY = 500L
+private val FOCUS_INDICATOR_BORDER_WIDTH = 2.dp
+
+private const val FOCUS_PULSE_DURATION_MILLIS = 400
+private const val FOCUS_ANIMATION_DURATION_MILLIS = 300
+private const val FOCUS_PULSE_MIN_ALPHA = 0.75f
+private const val FOCUS_LOCKED_ALPHA = 0.5f
+private const val FOCUS_FAILURE_ALPHA = 1.0f
+private const val FOCUS_LOCKED_SCALE = 0.8f
+private const val FOCUS_BURST_SCALE = 1.5f
+
+/**
+ * A composable that displays the elapsed time of a video recording formatted as minutes and seconds.
+ * This text is only visible during an active recording.
+ *
+ * @param modifier the modifier for this component.
+ * @param elapsedTimeUiStateProvider the provider for [ElapsedTimeUiState] for this component.
+ */
+@Composable
+fun ElapsedTimeText(
+    modifier: Modifier = Modifier,
+    elapsedTimeUiStateProvider: () -> ElapsedTimeUiState
+) {
+    val state = elapsedTimeUiStateProvider()
+    if (state is ElapsedTimeUiState.Enabled) {
+        val elapsedSeconds = state.elapsedTimeNanos.nanoseconds.inWholeSeconds
+        val minutes = elapsedSeconds / 60
+        val seconds = elapsedSeconds % 60
+        val formatRes = if (state.isPaused) {
+            R.string.elapsed_time_format_paused
+        } else {
+            R.string.elapsed_time_format
+        }
+        val format = stringResource(formatRes)
+        val formattedTime = remember(elapsedSeconds, format) {
+            format.format(minutes, seconds)
+        }
+        val accessibilityRes = if (state.isPaused) {
+            R.string.elapsed_time_accessibility_paused
+        } else {
+            R.string.elapsed_time_accessibility_recording
+        }
+        val accessibilityText = stringResource(accessibilityRes, minutes, seconds)
+        Box(
+            modifier = modifier
+                .testTag(ELAPSED_TIME_TAG)
+                .semantics(mergeDescendants = true) {
+                    contentDescription = accessibilityText
+                }
+                .defaultMinSize(minWidth = 72.dp, minHeight = 32.dp)
+                .background(color = Color(0xFFED0000), shape = CircleShape)
+                .padding(horizontal = 12.dp, vertical = 6.dp),
+            contentAlignment = Alignment.Center
+        ) {
+            Text(
+                text = formattedTime,
+                textAlign = TextAlign.Center,
+                color = Color.White,
+                style = MaterialTheme.typography.labelLarge.copy(
+                    fontWeight = FontWeight.Bold,
+                    fontFeatureSettings = "tnum",
+                    letterSpacing = 0.sp
+                )
+            )
+        }
+    }
+}
+
+/**
+ * A toggle button that allows the user to pause and resume video recording.
+ *
+ * The button's icon changes to reflect the current recording state: a pause icon is shown when
+ * recording is active, and a play icon is shown when the recording is paused. This component is only
+ * visible when a video recording is in progress.
+ *
+ * @param modifier the modifier for this component.
+ * @param onSetPause the callback invoked when the button is tapped.
+ * @param size the size of the button.
+ * @param currentRecordingStateProvider the provider for the current recording state.
+ */
+@OptIn(ExperimentalMaterial3ExpressiveApi::class)
+@Composable
+fun PauseResumeToggleButton(
+    modifier: Modifier = Modifier,
+    onSetPause: (Boolean) -> Unit,
+    size: Dp = ButtonDefaults.MediumContainerHeight,
+    currentRecordingStateProvider: () -> VideoRecordingState
+) {
+    val currentRecordingState = currentRecordingStateProvider()
+    if (currentRecordingState is VideoRecordingState.Active) {
+        FilledIconToggleButton(
+            checked = currentRecordingState is VideoRecordingState.Active.Recording,
+            onCheckedChange = {
+                onSetPause(
+                    currentRecordingState !is VideoRecordingState.Active.Paused
+                )
+            },
+            modifier = modifier.size(size)
+        ) {
+            Icon(
+                modifier = Modifier
+                    .size(ButtonDefaults.MediumIconSize),
+                painter = when (currentRecordingState) {
+                    is VideoRecordingState.Active.Recording -> painterResource(R.drawable.ic_pause)
+                    is VideoRecordingState.Active.Paused -> painterResource(
+                        R.drawable.ic_play_arrow
+                    )
+                },
+                contentDescription = stringResource(id = R.string.pause_resume_button_description)
+            )
+        }
+    }
+}
+
+/**
+ * A toggle button that allows the user to mute and unmute the microphone during video recording.
+ *
+ * When audio is enabled, the button displays a pulsing animation that visualizes the captured
+ * audio amplitude, providing real-time feedback. The icon switches between a microphone and a
+ * microphone-off symbol to indicate the current state.
+ *
+ * @param modifier the modifier for this component.
+ * @param buttonSize the size of the button.
+ * @param audioUiState the [AudioUiState] that determines the button's appearance and enabled status.
+ * @param onToggleAudio the callback invoked when the button is tapped.
+ */
+@OptIn(ExperimentalMaterial3ExpressiveApi::class)
+@Composable
+fun AmplitudeToggleButton(
+    modifier: Modifier = Modifier,
+    buttonSize: Dp = ButtonDefaults.MediumContainerHeight,
+    audioUiState: AudioUiState,
+    onToggleAudio: () -> Unit
+) {
+    val currentUiState = rememberUpdatedState(audioUiState)
+    val microphoneMutedDescription = stringResource(R.string.microphone_muted)
+    val microphoneOnDescription = stringResource(R.string.microphone_on)
+
+    // Tweak the multiplier to amplitude to adjust the visualizer sensitivity
+    val disableAnimations = LocalDisableAnimations.current
+    val animatedAudioAlpha by animateFloatAsState(
+        targetValue = if (disableAnimations) {
+            1f
+        } else {
+            EaseOutExpo.transform((currentUiState.value.amplitude.toFloat()).coerceIn(0f, 1f))
+        },
+        animationSpec = if (disableAnimations) snap() else tween(),
+        label = "AudioAnimation"
+    )
+    Box(contentAlignment = Alignment.Center) {
+        FilledIconToggleButton(
+            modifier = modifier
+                .size(buttonSize)
+                .testTag(AUDIO_INPUT_TOGGLE)
+                .semantics {
+                    stateDescription = if (audioUiState is AudioUiState.Enabled.On) {
+                        microphoneOnDescription
+                    } else {
+                        microphoneMutedDescription
+                    }
+                    audioState = when (audioUiState) {
+                        is AudioUiState.Disabled,
+                        AudioUiState.Enabled.Mute -> AudioInputState.OFF
+                        is AudioUiState.Enabled.On -> {
+                            if (audioUiState.isAudioStreamActive || audioUiState.amplitude > 0.0) {
+                                AudioInputState.INCOMING
+                            } else {
+                                AudioInputState.READY
+                            }
+                        }
+                    }
+                }
+                .drawBehind {
+                    if (audioUiState is AudioUiState.Enabled.On) {
+                        drawCircle(
+                            color = Color.White,
+                            radius = size.width * .55f,
+                            alpha = animatedAudioAlpha // Animate alpha for a pulsing effect
+                        )
+                    }
+                },
+            checked = audioUiState is AudioUiState.Enabled.On,
+            onCheckedChange = { onToggleAudio() },
+            // todo shapes
+            enabled = audioUiState is AudioUiState.Enabled
+        ) {
+            Icon(
+                modifier = Modifier.size(ButtonDefaults.MediumIconSize),
+                painter = if (currentUiState.value is AudioUiState.Enabled.On) {
+                    painterResource(R.drawable.ic_mic)
+                } else {
+                    painterResource(R.drawable.ic_mic_off)
+                },
+                contentDescription = stringResource(id = R.string.audio_visualizer_icon_description)
+            )
+        }
+    }
+}
+
+/**
+ * A toggle switch that allows the user to switch between image and video capture modes.
+ *
+ * This component visually represents the selected mode with distinct icons for photo and video.
+ * It is only enabled when both capture modes are available to the camera.
+ *
+ * @param uiState the [CaptureModeToggleUiState.Available] for this component.
+ * @param onChangeCaptureMode the callback for changing the capture mode.
+ * @param onToggleWhenDisabled the callback for when the toggle is disabled.
+ * @param modifier the modifier for this component.
+ */
+@Composable
+fun CaptureModeToggleButton(
+    uiState: CaptureModeToggleUiState.Available,
+    onChangeCaptureMode: (CaptureMode) -> Unit,
+    onToggleWhenDisabled: (DisableRationale) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    // Captures image (left), else captures video (right).
+    val toggleState = remember(uiState.selectedCaptureMode) {
+        when (uiState.selectedCaptureMode) {
+            CaptureMode.IMAGE_ONLY, CaptureMode.STANDARD -> false
+            CaptureMode.VIDEO_ONLY -> true
+        }
+    }
+
+    val enabled =
+        uiState.isCaptureModeSelectable(CaptureMode.VIDEO_ONLY) &&
+            uiState.isCaptureModeSelectable(
+                CaptureMode.IMAGE_ONLY
+            ) && uiState.selectedCaptureMode != CaptureMode.STANDARD
+
+    ToggleSwitch(
+        modifier = modifier.testTag(CAPTURE_MODE_TOGGLE_BUTTON),
+        checked = toggleState,
+        onCheckedChange = { isChecked ->
+            val newCaptureMode = if (isChecked) CaptureMode.VIDEO_ONLY else CaptureMode.IMAGE_ONLY
+            onChangeCaptureMode(newCaptureMode)
+        },
+        onToggleWhenDisabled = {
+            val disabledReason: DisableRationale? =
+                (
+                    uiState.findSelectableStateFor(CaptureMode.VIDEO_ONLY) as?
+                        SingleSelectableUiState.Disabled<CaptureMode>
+                    )?.disabledReason
+                    ?: (
+                        uiState.findSelectableStateFor(CaptureMode.IMAGE_ONLY)
+                            as? SingleSelectableUiState.Disabled<CaptureMode>
+                        )
+                        ?.disabledReason
+            disabledReason?.let(onToggleWhenDisabled)
+        },
+        enabled = enabled,
+        leftIcon = if (uiState.selectedCaptureMode ==
+            CaptureMode.IMAGE_ONLY
+        ) {
+            R.drawable.ic_camera_alt_filled
+        } else {
+            R.drawable.ic_camera_alt_outline
+        },
+        rightIcon = if (uiState.selectedCaptureMode ==
+            CaptureMode.VIDEO_ONLY
+        ) {
+            R.drawable.ic_videocam_filled
+        } else {
+            R.drawable.ic_videocam_outline
+        },
+        leftIconDescription = if (enabled) {
+            stringResource(id = R.string.capture_mode_image_capture_content_description)
+        } else {
+            stringResource(id = R.string.capture_mode_image_capture_content_description_disabled)
+        },
+        rightIconDescription = if (enabled) {
+            stringResource(id = R.string.capture_mode_video_recording_content_description)
+        } else {
+            stringResource(id = R.string.capture_mode_video_recording_content_description_disabled)
+        }
+    )
+}
+
+/**
+ * A composable that displays a snackbar message to the user, with an optional action button
+ * and a mandatory close button for dismissal.
+ *
+ * @param modifier the modifier for this component.
+ * @param snackbarToShow the [SnackbarData] to show.
+ * @param snackbarHostState the [SnackbarHostState] for this component.
+ * @param onSnackbarResult the callback for the snackbar result.
+ */
+@Composable
+fun TestableSnackbar(
+    modifier: Modifier = Modifier,
+    snackbarToShow: SnackbarData,
+    snackbarHostState: SnackbarHostState,
+    snackBarController: SnackBarController
+) {
+    Box(
+        // box seems to need to have some size to be detected by UiAutomator
+        modifier = modifier
+            .size(20.dp)
+    ) {
+        val context = LocalContext.current
+        LaunchedEffect(snackbarToShow) {
+            val message = context.getString(snackbarToShow.stringResource)
+            Log.d(TAG, "Snackbar Displayed with message: $message")
+            try {
+                val result =
+                    snackbarHostState.showSnackbar(
+                        message = message,
+                        duration = snackbarToShow.duration,
+                        withDismissAction = snackbarToShow.withDismissAction,
+                        actionLabel = if (snackbarToShow.actionLabelRes == null) {
+                            null
+                        } else {
+                            context.getString(snackbarToShow.actionLabelRes!!)
+                        }
+                    )
+                when (result) {
+                    SnackbarResult.ActionPerformed,
+                    SnackbarResult.Dismissed -> snackBarController.onSnackBarResult(
+                        snackbarToShow.cookie
+                    )
+                }
+            } catch (e: Exception) {
+                // This is equivalent to dismissing the snackbar
+                snackBarController.onSnackBarResult(snackbarToShow.cookie)
+            }
+        }
+    }
+}
+
+@Composable
+private fun DetectWindowColorModeChanges(
+    surfaceRequest: SurfaceRequest,
+    implementationMode: ImplementationMode,
+    onRequestWindowColorMode: (Int) -> Unit
+) {
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+        val currentSurfaceRequest: SurfaceRequest by rememberUpdatedState(surfaceRequest)
+        val currentImplementationMode: ImplementationMode by rememberUpdatedState(
+            implementationMode
+        )
+        val currentOnRequestWindowColorMode: (Int) -> Unit by rememberUpdatedState(
+            onRequestWindowColorMode
+        )
+
+        LaunchedEffect(Unit) {
+            val colorModeSnapshotFlow =
+                snapshotFlow {
+                    Pair(
+                        currentSurfaceRequest.dynamicRange,
+                        currentImplementationMode
+                    )
+                }
+                    .map { (dynamicRange, implMode) ->
+                        val isSourceHdr = dynamicRange.encoding != CXDynamicRange.ENCODING_SDR
+                        val destSupportsHdr = implMode == ImplementationMode.EXTERNAL
+                        if (isSourceHdr && destSupportsHdr) {
+                            ActivityInfo.COLOR_MODE_HDR
+                        } else {
+                            ActivityInfo.COLOR_MODE_DEFAULT
+                        }
+                    }.distinctUntilChanged()
+
+            val callbackSnapshotFlow = snapshotFlow { currentOnRequestWindowColorMode }
+
+            // Combine both flows so that we call the callback every time it changes or the
+            // window color mode changes.
+            // We'll also reset to default when this LaunchedEffect is disposed
+            combine(colorModeSnapshotFlow, callbackSnapshotFlow) { colorMode, callback ->
+                Pair(colorMode, callback)
+            }.onCompletion {
+                currentOnRequestWindowColorMode(ActivityInfo.COLOR_MODE_DEFAULT)
+            }.collect { (colorMode, callback) ->
+                callback(colorMode)
+            }
+        }
+    }
+}
+
+/**
+ * A composable that displays the camera preview and handles user input gestures.
+ *
+ * This component is the core of the camera's UI, showing the live feed from the camera.
+ * It supports several gestures:
+ * - **Single Tap:** Triggers a tap-to-focus event at the tapped location.
+ * - **Double Tap:** Flips the camera between front and back lenses.
+ * - **Pinch Gesture:** Scales the camera's zoom level.
+ *
+ * @param previewDisplayUiState the [PreviewDisplayUiState] for this component.
+ * @param onTapToFocus the callback for tapping to focus.
+ * @param onFlipCamera the callback for flipping the camera.
+ * @param onScaleZoom the callback for scaling the zoom.
+ * @param onRequestWindowColorMode the callback for requesting a window color mode.
+ * @param surfaceRequest the [SurfaceRequest] for the preview.
+ * @param focusMeteringUiState the [FocusMeteringUiState] for this component.
+ * @param modifier the modifier for this component.
+ */
+@Composable
+fun PreviewDisplay(
+    previewDisplayUiState: PreviewDisplayUiState,
+    onTapToFocus: (x: Float, y: Float) -> Unit,
+    onFlipCamera: () -> Unit,
+    onScaleZoom: (Float) -> Unit,
+    onRequestWindowColorMode: (Int) -> Unit,
+    surfaceRequest: SurfaceRequest?,
+    focusMeteringUiState: FocusMeteringUiState,
+    modifier: Modifier = Modifier
+) {
+    val aspectRatioUiState = previewDisplayUiState.aspectRatioUiState
+    if (aspectRatioUiState !is AspectRatioUiState.Available) {
+        return
+    }
+    @Suppress("DEPRECATION")
+    val transformableState = rememberTransformableState(
+        onTransformation = { pinchZoomChange, _, _ ->
+            onScaleZoom(pinchZoomChange)
+        }
+    )
+
+    surfaceRequest?.let {
+        BoxWithConstraints(
+            modifier
+                .fillMaxSize()
+                .background(Color.Black),
+            contentAlignment = Alignment.TopCenter
+        ) {
+            val aspectRatio =
+                aspectRatioUiState.selectedAspectRatio
+            val maxAspectRatio: Float = maxWidth / maxHeight
+            val aspectRatioFloat: Float = aspectRatio.toFloat()
+            val shouldUseMaxWidth = maxAspectRatio <= aspectRatioFloat
+            val width = if (shouldUseMaxWidth) maxWidth else maxHeight * aspectRatioFloat
+            val height = if (!shouldUseMaxWidth) maxHeight else maxWidth / aspectRatioFloat
+            var imageVisible by remember { mutableStateOf(true) }
+            val targetBoundsState = LocalOverlapTargetBounds.current
+
+            val disableAnimations = LocalDisableAnimations.current
+            val imageAlpha: Float by animateFloatAsState(
+                targetValue = if (imageVisible) 1f else 0f,
+                animationSpec = if (disableAnimations) {
+                    snap()
+                } else {
+                    tween(
+                        durationMillis = (BLINK_TIME / 2).toInt(),
+                        easing = LinearEasing
+                    )
+                },
+                label = ""
+            )
+
+            LaunchedEffect(previewDisplayUiState.lastBlinkTimeStamp) {
+                if (previewDisplayUiState.lastBlinkTimeStamp != 0L) {
+                    imageVisible = false
+                    delay(BLINK_TIME)
+                    imageVisible = true
+                }
+            }
+
+            Box(
+                modifier = Modifier
+                    .testTag(PREVIEW_DISPLAY)
+                    .onGloballyPositioned { coordinates ->
+                        val bounds = coordinates.boundsInWindow()
+                        if (targetBoundsState.value != bounds) {
+                            targetBoundsState.value = bounds
+                        }
+                    }
+                    .width(width)
+                    .height(height)
+                    .transformable(state = transformableState)
+                    .alpha(imageAlpha)
+                    .clip(RoundedCornerShape(16.dp))
+            ) {
+                val implementationMode = when {
+                    Build.VERSION.SDK_INT > 24 -> ImplementationMode.EXTERNAL
+                    else -> ImplementationMode.EMBEDDED
+                }
+
+                DetectWindowColorModeChanges(
+                    surfaceRequest = surfaceRequest,
+                    implementationMode = implementationMode,
+                    onRequestWindowColorMode = onRequestWindowColorMode
+                )
+
+                val coordinateTransformer = remember { MutableCoordinateTransformer() }
+                val viewfinderDescription =
+                    stringResource(R.string.camera_viewfinder_content_description)
+                CameraXViewfinder(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .semantics { contentDescription = viewfinderDescription }
+                        .pointerInput(onFlipCamera) {
+                            detectTapGestures(
+                                onDoubleTap = { offset ->
+                                    // double tap to flip camera
+                                    Log.d(TAG, "onDoubleTap $offset")
+                                    onFlipCamera()
+                                },
+                                onTap = {
+                                    with(coordinateTransformer) {
+                                        val surfaceCoords = it.transform()
+                                        Log.d(
+                                            "TAG",
+                                            "onTapToFocus: " +
+                                                "input{$it} -> surface{$surfaceCoords}"
+                                        )
+                                        onTapToFocus(surfaceCoords.x, surfaceCoords.y)
+                                    }
+                                }
+                            )
+                        },
+                    surfaceRequest = it,
+                    implementationMode = implementationMode,
+                    coordinateTransformer = coordinateTransformer
+                )
+                FocusMeteringIndicator(
+                    focusMeteringUiState = focusMeteringUiState,
+                    coordinateTransformer = coordinateTransformer
+                )
+            }
+        }
+    }
+}
+
+/**
+ * A wrapper composable for the primary capture button.
+ *
+ * This component serves as the main user interaction point for capturing photos and recording videos.
+ * It adapts its behavior based on the current [CaptureMode]:
+ * - In **Hybrid mode**, a tap takes a picture, and a long press starts a video recording.
+ * - In **Image-only mode**, it only responds to taps for image capture.
+ * - In **Video-only mode**, a tap starts a video recording that can be locked for hands-free operation.
+ *
+ * It also handles gestures for zooming and locking the video recording.
+ *
+ * @param modifier the modifier for this component.
+ * @param captureButtonUiState the [CaptureButtonUiState] that dictates the button's behavior.
+ * @param onIncrementZoom callback to adjust the camera's zoom level.
+ * @param onCaptureImage callback to trigger image capture.
+ * @param onStartVideoRecording callback to start video recording.
+ * @param onStopVideoRecording callback to stop video recording.
+ * @param onLockVideoRecording callback to lock the video recording for hands-free operation.
+ */
+@Composable
+fun CaptureButton(
+    modifier: Modifier = Modifier,
+    captureButtonUiState: CaptureButtonUiState,
+    onIncrementZoom: (Float) -> Unit = {},
+    onCaptureImage: (ContentResolver) -> Unit = {},
+    onStartVideoRecording: () -> Unit = {},
+    onStopVideoRecording: () -> Unit = {},
+    onLockVideoRecording: (Boolean) -> Unit = {}
+) {
+    val context = LocalContext.current
+
+    CaptureButton(
+        modifier = modifier.testTag(CAPTURE_BUTTON),
+        onIncrementZoom = onIncrementZoom,
+        onImageCapture = {
+            if (captureButtonUiState is CaptureButtonUiState.Enabled &&
+                captureButtonUiState.isEnabled
+            ) {
+                onCaptureImage(context.contentResolver)
+            }
+        },
+        onStartRecording = {
+            if (captureButtonUiState is CaptureButtonUiState.Enabled &&
+                captureButtonUiState.isEnabled
+            ) {
+                onStartVideoRecording()
+            }
+        },
+        onStopRecording = {
+            onStopVideoRecording()
+        },
+        captureButtonUiState = captureButtonUiState,
+        onLockVideoRecording = onLockVideoRecording
+    )
+}
+
+/**
+ * A composable that displays an icon indicating the current video stabilization mode.
+ *
+ * The icon is only visible when a stabilization mode other than 'OFF' is active. It is rendered in
+ * full white when stabilization is actively being applied, and is greyed out (with reduced alpha)
+ * if the stabilization mode is enabled but not currently active.
+ *
+ * @param stabilizationUiState the [StabilizationUiState] for this component.
+ * @param modifier the modifier for this component.
+ */
+@OptIn(ExperimentalMaterial3ExpressiveApi::class)
+@Composable
+fun StabilizationIcon(stabilizationUiState: StabilizationUiState, modifier: Modifier = Modifier) {
+    if (stabilizationUiState is StabilizationUiState.Enabled) {
+        val contentColor = Color.White.let {
+            if (!stabilizationUiState.active) it.copy(alpha = 0.38f) else it
+        }
+        CompositionLocalProvider(LocalContentColor provides contentColor) {
+            if (stabilizationUiState.stabilizationMode != StabilizationMode.OFF) {
+                Icon(
+                    modifier = modifier.size(IconButtonDefaults.smallIconSize),
+
+                    painter = when (stabilizationUiState) {
+                        is StabilizationUiState.Specific ->
+                            when (stabilizationUiState.stabilizationMode) {
+                                StabilizationMode.AUTO ->
+                                    throw IllegalStateException(
+                                        "AUTO is not a specific StabilizationUiState."
+                                    )
+
+                                StabilizationMode.HIGH_QUALITY ->
+                                    painterResource(R.drawable.video_stable_hq_filled_icon)
+
+                                StabilizationMode.OPTICAL ->
+                                    painterResource(R.drawable.video_stable_ois_filled_icon)
+
+                                StabilizationMode.ON ->
+                                    painterResource(R.drawable.ic_video_stable)
+
+                                else ->
+                                    TODO(
+                                        "Cannot retrieve icon for unimplemented " +
+                                            "stabilization mode:" +
+                                            "${stabilizationUiState.stabilizationMode}"
+                                    )
+                            }
+
+                        is StabilizationUiState.Auto -> {
+                            when (stabilizationUiState.stabilizationMode) {
+                                StabilizationMode.ON ->
+                                    painterResource(R.drawable.video_stable_auto_filled_icon)
+
+                                StabilizationMode.OPTICAL ->
+                                    painterResource(R.drawable.video_stable_ois_auto_filled_icon)
+
+                                else ->
+                                    TODO(
+                                        "Auto stabilization not yet implemented for " +
+                                            "${stabilizationUiState.stabilizationMode}, " +
+                                            "unable to retrieve icon."
+                                    )
+                            }
+                        }
+                    },
+                    contentDescription = when (stabilizationUiState.stabilizationMode) {
+                        StabilizationMode.AUTO ->
+                            stringResource(R.string.stabilization_icon_description_auto)
+
+                        StabilizationMode.ON ->
+                            stringResource(
+                                R.string.stabilization_icon_description_preview_and_video
+                            )
+
+                        StabilizationMode.HIGH_QUALITY ->
+                            stringResource(R.string.stabilization_icon_description_video_only)
+
+                        StabilizationMode.OPTICAL ->
+                            stringResource(R.string.stabilization_icon_description_optical)
+
+                        else -> null
+                    }
+                )
+            }
+        }
+    }
+}
+
+/**
+ * A composable that displays an icon indicating the current video quality setting.
+ *
+ * The icon dynamically changes to represent the selected resolution, such as SD, HD, FHD, or UHD.
+ * It is not displayed if the video quality is unspecified.
+ *
+ * @param videoQuality the [VideoQuality] for this component.
+ * @param modifier the modifier for this component.
+ */
+@OptIn(ExperimentalMaterial3ExpressiveApi::class)
+@Composable
+fun VideoQualityIcon(videoQuality: VideoQuality, modifier: Modifier = Modifier) {
+    CompositionLocalProvider(LocalContentColor provides Color.White) {
+        if (videoQuality != VideoQuality.UNSPECIFIED) {
+            Icon(
+                modifier = modifier.size(IconButtonDefaults.smallIconSize),
+
+                painter = when (videoQuality) {
+                    VideoQuality.SD ->
+                        painterResource(R.drawable.video_resolution_sd_icon)
+
+                    VideoQuality.HD ->
+                        painterResource(R.drawable.video_resolution_hd_icon)
+
+                    VideoQuality.FHD ->
+                        painterResource(R.drawable.video_resolution_fhd_icon)
+
+                    VideoQuality.UHD ->
+                        painterResource(R.drawable.video_resolution_uhd_icon)
+
+                    VideoQuality.UNSPECIFIED ->
+                        throw IllegalStateException("Illegal video quality state")
+                },
+                contentDescription = when (videoQuality) {
+                    VideoQuality.SD ->
+                        stringResource(R.string.video_quality_description_sd)
+
+                    VideoQuality.HD ->
+                        stringResource(R.string.video_quality_description_hd)
+
+                    VideoQuality.FHD ->
+                        stringResource(R.string.video_quality_description_fhd)
+
+                    VideoQuality.UHD ->
+                        stringResource(R.string.video_quality_description_uhd)
+
+                    VideoQuality.UNSPECIFIED -> null
+                }
+            )
+        }
+    }
+}
+
+/**
+ * A button that allows the user to flip between the front and rear cameras.
+ *
+ * This button is only visible and enabled if the device has more than one camera lens available.
+ *
+ * @param enabledCondition the enabled condition for this component.
+ * @param flipLensUiState the [FlipLensUiState] for this component.
+ * @param onClick the callback for when the button is clicked.
+ * @param modifier the modifier for this component.
+ */
+@OptIn(ExperimentalMaterial3ExpressiveApi::class)
+@Composable
+fun FlipCameraButton(
+    enabledCondition: Boolean,
+    flipLensUiState: FlipLensUiState,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    if (flipLensUiState is FlipLensUiState.Available) {
+        var rotation by remember { mutableFloatStateOf(0f) }
+        val animatedRotation = remember { Animatable(0f) }
+        var initialLaunch by remember { mutableStateOf(false) }
+        val disableAnimations = LocalDisableAnimations.current
+
+        // spin animate whenever lensfacing changes
+        LaunchedEffect(flipLensUiState.selectedLensFacing) {
+            if (initialLaunch) {
+                // full 360
+                rotation -= 180f
+                if (disableAnimations) {
+                    animatedRotation.snapTo(rotation)
+                } else {
+                    animatedRotation.animateTo(
+                        targetValue = rotation,
+                        animationSpec = spring(
+                            dampingRatio = Spring.DampingRatioMediumBouncy,
+                            stiffness = Spring.StiffnessVeryLow
+                        )
+                    )
+                }
+            }
+            // don't rotate on the initial launch
+            else {
+                initialLaunch = true
+            }
+        }
+        IconButton(
+            modifier = modifier,
+            onClick = onClick,
+            enabled = enabledCondition
+        ) {
+            val contentDescription = when (flipLensUiState.selectedLensFacing) {
+                com.google.jetpackcamera.model.LensFacing.FRONT -> stringResource(
+                    R.string.quick_settings_front_camera_description
+                )
+                com.google.jetpackcamera.model.LensFacing.BACK -> stringResource(
+                    R.string.quick_settings_back_camera_description
+                )
+            }
+            Icon(
+                painter = painterResource(R.drawable.ic_flip_camera_android),
+                contentDescription = contentDescription,
+                modifier = Modifier
+                    .size(IconButtonDefaults.extraLargeIconSize)
+                    .rotate(animatedRotation.value)
+            )
+        }
+    }
+}
+
+/**
+ * A composable that displays an indicator on the viewfinder when the user taps to focus.
+ *
+ * @param focusMeteringUiState The state of the focus metering operation.
+ * @param coordinateTransformer The coordinate transformer to use to map the surface coordinates
+ * to screen coordinates. This should come from [CameraXViewfinder].
+ */
+@VisibleForTesting
+@Composable
+internal fun FocusMeteringIndicator(
+    focusMeteringUiState: FocusMeteringUiState,
+    coordinateTransformer: CoordinateTransformer
+) {
+    val lastSpecifiedState = remember { arrayOfNulls<FocusMeteringUiState.Specified>(1) }
+    SideEffect {
+        if (focusMeteringUiState is FocusMeteringUiState.Specified) {
+            lastSpecifiedState[0] = focusMeteringUiState
+        }
+    }
+
+    val activeState =
+        (focusMeteringUiState as? FocusMeteringUiState.Specified)
+            ?: lastSpecifiedState[0]
+            ?: return
+
+    val disableAnimations = LocalDisableAnimations.current
+    val pulseAlphaProvider: () -> Float = if (disableAnimations) {
+        { 1f }
+    } else {
+        val transition = rememberInfiniteTransition(label = "FocusPulse")
+        val alphaState = transition.animateFloat(
+            initialValue = 1f,
+            targetValue = FOCUS_PULSE_MIN_ALPHA,
+            animationSpec = infiniteRepeatable(
+                animation = tween(FOCUS_PULSE_DURATION_MILLIS),
+                repeatMode = RepeatMode.Reverse
+            ),
+            label = "FocusPulseAlpha"
+        )
+        val provider: () -> Float = { alphaState.value }
+        provider
+    }
+
+    val currentStatus = (focusMeteringUiState as? FocusMeteringUiState.Specified)?.status
+    var showFailureIndicator by remember { mutableStateOf(false) }
+    LaunchedEffect(currentStatus) {
+        if (currentStatus == FocusMeteringUiState.Status.FAILURE) {
+            showFailureIndicator = true
+            delay(FOCUS_INDICATOR_FAILURE_DELAY)
+            showFailureIndicator = false
+        } else {
+            showFailureIndicator = false
+        }
+    }
+
+    // Accessibility: resolve focus status strings for semantics and TalkBack
+    val focusScanningDescription = stringResource(R.string.focus_scanning)
+    val focusLockedDescription = stringResource(R.string.focus_locked)
+    val focusFailedDescription = stringResource(R.string.focus_failed)
+    val focusReleasedDescription = stringResource(R.string.focus_released)
+
+    val focusStatusDescription = when (currentStatus) {
+        FocusMeteringUiState.Status.RUNNING -> focusScanningDescription
+        FocusMeteringUiState.Status.SUCCESS -> focusLockedDescription
+        FocusMeteringUiState.Status.FAILURE -> focusFailedDescription
+        FocusMeteringUiState.Status.CANCELLED -> focusReleasedDescription
+        null -> ""
+    }
+
+    // Accessibility: announce focus state transitions to TalkBack
+    val view = LocalView.current
+    LaunchedEffect(currentStatus) {
+        when (currentStatus) {
+            FocusMeteringUiState.Status.RUNNING ->
+                view.announceForAccessibility(focusScanningDescription)
+            FocusMeteringUiState.Status.SUCCESS ->
+                view.announceForAccessibility(focusLockedDescription)
+            FocusMeteringUiState.Status.FAILURE ->
+                view.announceForAccessibility(focusFailedDescription)
+            FocusMeteringUiState.Status.CANCELLED ->
+                view.announceForAccessibility(focusReleasedDescription)
+            null -> {}
+        }
+    }
+
+    val isVisible = currentStatus == FocusMeteringUiState.Status.RUNNING ||
+        currentStatus == FocusMeteringUiState.Status.SUCCESS ||
+        showFailureIndicator
+
+    val animatedScale by animateFloatAsState(
+        targetValue = if (currentStatus == FocusMeteringUiState.Status.SUCCESS) {
+            FOCUS_LOCKED_SCALE
+        } else {
+            1.0f
+        },
+        animationSpec =
+        if (disableAnimations) {
+            snap()
+        } else {
+            tween(FOCUS_ANIMATION_DURATION_MILLIS, easing = FastOutSlowInEasing)
+        },
+        label = "FocusIndicatorScale"
+    )
+
+    val reticleAlphaProvider = {
+        when (currentStatus) {
+            FocusMeteringUiState.Status.RUNNING -> pulseAlphaProvider()
+            FocusMeteringUiState.Status.SUCCESS -> FOCUS_LOCKED_ALPHA
+            FocusMeteringUiState.Status.FAILURE -> FOCUS_FAILURE_ALPHA
+            FocusMeteringUiState.Status.CANCELLED, null -> {
+                when (lastSpecifiedState[0]?.status) {
+                    FocusMeteringUiState.Status.SUCCESS -> FOCUS_LOCKED_ALPHA
+                    FocusMeteringUiState.Status.FAILURE -> FOCUS_FAILURE_ALPHA
+                    FocusMeteringUiState.Status.RUNNING -> pulseAlphaProvider()
+                    else -> FOCUS_LOCKED_ALPHA
+                }
+            }
+        }
+    }
+
+    // Map coordinates from surface coordinates back to screen coordinates
+    val tapCoords =
+        remember(
+            coordinateTransformer.transformMatrix,
+            activeState.surfaceCoordinates
+        ) {
+            Matrix().run {
+                setFrom(coordinateTransformer.transformMatrix)
+                invert()
+                map(activeState.surfaceCoordinates)
+            }
+        }
+
+    AnimatedVisibility(
+        visible = isVisible,
+        enter = if (disableAnimations) {
+            EnterTransition.None
+        } else {
+            fadeIn() + scaleIn(
+                initialScale = FOCUS_BURST_SCALE
+            )
+        },
+        exit = if (disableAnimations) {
+            ExitTransition.None
+        } else {
+            fadeOut(tween(FOCUS_ANIMATION_DURATION_MILLIS, easing = FastOutSlowInEasing)) +
+                scaleOut(
+                    targetScale = FOCUS_BURST_SCALE,
+                    animationSpec = tween(
+                        FOCUS_ANIMATION_DURATION_MILLIS,
+                        easing = FastOutSlowInEasing
+                    )
+                )
+        },
+        modifier = Modifier
+            .offset { tapCoords.round() }
+            .offset(-TAP_TO_FOCUS_INDICATOR_SIZE / 2, -TAP_TO_FOCUS_INDICATOR_SIZE / 2)
+    ) {
+        Box(
+            modifier = Modifier.size(TAP_TO_FOCUS_INDICATOR_SIZE),
+            contentAlignment = Alignment.Center
+        ) {
+            Box(
+                Modifier
+                    .testTag(FOCUS_METERING_INDICATOR_TAG)
+                    .semantics {
+                        if (focusStatusDescription.isNotEmpty()) {
+                            contentDescription = focusStatusDescription
+                        }
+                    }
+                    .graphicsLayer {
+                        alpha = reticleAlphaProvider()
+                    }
+                    .border(
+                        FOCUS_INDICATOR_BORDER_WIDTH,
+                        Color.White,
+                        CircleShape
+                    )
+                    .size(TAP_TO_FOCUS_INDICATOR_SIZE * animatedScale)
+            )
+        }
+    }
+}
+
+@Preview(name = "Elapsed Time", showBackground = true, backgroundColor = 0xFF000000)
+@Composable
+private fun ElapsedTimeTextPreview() {
+    // Assuming you have a JcaTheme in the google/jetpack-camera-app repository,
+    // you would typically wrap this in your custom theme.
+    MaterialTheme {
+        Column(
+            modifier = Modifier.padding(16.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(16.dp)
+        ) {
+            // Scenario 1: Initial recording state (0:00)
+            ElapsedTimeText(
+                elapsedTimeUiStateProvider = {
+                    ElapsedTimeUiState.Enabled(0L)
+                }
+            )
+
+            // Scenario 2: Standard recording state
+            ElapsedTimeText(
+                elapsedTimeUiStateProvider = {
+                    ElapsedTimeUiState.Enabled(30.seconds.inWholeNanoseconds)
+                }
+            )
+
+            // Scenario 3: Over a minute (1:05)
+            ElapsedTimeText(
+                elapsedTimeUiStateProvider = {
+                    ElapsedTimeUiState.Enabled(65.seconds.inWholeNanoseconds)
+                }
+            )
+
+            // Scenario 4: Over 10 minutes (10:05)
+            ElapsedTimeText(
+                elapsedTimeUiStateProvider = {
+                    ElapsedTimeUiState.Enabled(605.seconds.inWholeNanoseconds)
+                }
+            )
+
+            // Scenario 5: Paused recording state
+            ElapsedTimeText(
+                elapsedTimeUiStateProvider = {
+                    ElapsedTimeUiState.Enabled(
+                        elapsedTimeNanos = 30.seconds.inWholeNanoseconds,
+                        isPaused = true
+                    )
+                }
+            )
+
+            // Scenario 6: Unavailable state (renders nothing, verifying the if-condition)
+            ElapsedTimeText(
+                elapsedTimeUiStateProvider = {
+                    ElapsedTimeUiState.Unavailable
+                }
+            )
+        }
+    }
+}

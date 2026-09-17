@@ -1,0 +1,141 @@
+/*
+ * Copyright (C) 2023 The Android Open Source Project
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *      http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+plugins {
+    alias(libs.plugins.android.library)
+    alias(libs.plugins.android.legacy.kapt)
+    alias(libs.plugins.compose.compiler)
+}
+
+android {
+    namespace = "com.google.jetpackcamera.ui.components.capture"
+    compileSdk {
+        version = release(libs.versions.compileSdk.get().toInt()) {
+            minorApiLevel = libs.versions.compileSdkMinor.get().toInt()
+        }
+    }
+
+    defaultConfig {
+        minSdk = libs.versions.minSdk.get().toInt()
+        testOptions.targetSdk = libs.versions.targetSdk.get().toInt()
+        lint.targetSdk = libs.versions.targetSdk.get().toInt()
+
+        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+    }
+
+    testOptions {
+        unitTests {
+            isReturnDefaultValues = true
+            isIncludeAndroidResources = true
+        }
+    }
+
+
+    flavorDimensions += "flavor"
+    productFlavors {
+        create("stable") {
+            dimension = "flavor"
+            isDefault = true
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility = JavaVersion.VERSION_17
+        targetCompatibility = JavaVersion.VERSION_17
+    }
+    kotlin {
+        jvmToolchain(17)
+        compilerOptions {
+            freeCompilerArgs.add("-Xcontext-receivers")
+        }
+    }
+    buildFeatures {
+        buildConfig = true
+        compose = true
+    }
+}
+
+dependencies {
+    // Compose
+    val composeBom = platform(libs.compose.bom)
+    implementation(composeBom)
+    implementation(libs.androidx.foundation.layout)
+
+    // AndroidX Core KTX
+    implementation(libs.androidx.core.ktx)
+
+    // Accompanist - Permissions
+    implementation(libs.accompanist.permissions)
+
+    // Compose - Material Design 3
+    implementation(libs.compose.material3)
+
+    // Compose - Android Studio Preview support
+    implementation(libs.compose.ui.tooling.preview)
+    debugImplementation(libs.compose.ui.tooling)
+
+    // CameraX
+    implementation(libs.camera.core)
+    implementation(libs.camera.compose)
+
+    // Compose - Testing
+    androidTestImplementation(libs.compose.junit)
+    debugImplementation(libs.compose.test.manifest)
+    // noinspection TestManifestGradleConfiguration: required for release build unit tests
+    testImplementation(libs.compose.test.manifest)
+    testImplementation(libs.compose.junit)
+
+    // Testing
+    testImplementation(libs.junit)
+    testImplementation(libs.truth)
+    androidTestImplementation(libs.truth)
+    testImplementation(libs.kotlinx.coroutines.test)
+    testImplementation(libs.robolectric)
+    testImplementation(libs.androidx.junit)
+    androidTestImplementation(libs.androidx.junit)
+    androidTestImplementation(libs.androidx.espresso.core)
+    androidTestImplementation(libs.androidx.espresso.accessibility)
+    androidTestImplementation(libs.compose.accessibility)
+    androidTestImplementation(libs.accessibility.test.framework)
+
+    implementation(project(":ui:uistate"))
+    implementation(project(":ui:uistate:capture"))
+    implementation(project(":ui:controller"))
+    implementation(project(":core:camera"))
+    implementation(project(":core:common"))
+    implementation(project(":data:media"))
+    implementation(project(":core:model"))
+    testImplementation(project(":core:common"))
+    testImplementation(project(":core:camera:testing"))
+    testImplementation(project(":data:settings"))
+    testImplementation(project(":core:settings"))
+    testImplementation(project(":ui:controller:testing"))
+    androidTestImplementation(project(":ui:controller:testing"))
+    androidTestImplementation(libs.kotlinx.coroutines.test)
+
+}
+
+// Allow references to generated code
+kapt {
+    correctErrorTypes = true
+}
+configurations.all {
+    resolutionStrategy {
+        // Exclude protobuf-lite to prevent DuplicateClassException conflicts with protobuf-javalite
+        // that is brought in by androidx.datastore, since the accessibility-test-framework brings in protobuf-lite.
+        exclude(group = "com.google.protobuf", module = "protobuf-lite")
+    }
+}

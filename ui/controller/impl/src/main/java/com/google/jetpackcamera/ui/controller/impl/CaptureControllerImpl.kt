@@ -1,0 +1,245 @@
+/*
+ * Copyright (C) 2026 The Android Open Source Project
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *      http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+package com.google.jetpackcamera.ui.controller.impl
+
+import android.content.ContentResolver
+import android.net.Uri
+import android.util.Log
+import androidx.tracing.traceAsync
+import com.google.jetpackcamera.core.camera.CameraSystem
+import com.google.jetpackcamera.core.camera.OnVideoRecordEvent
+import com.google.jetpackcamera.model.CaptureEvent
+import com.google.jetpackcamera.model.ExternalCaptureMode
+import com.google.jetpackcamera.model.ImageCaptureEvent
+import com.google.jetpackcamera.model.IntProgress
+import com.google.jetpackcamera.model.SaveLocation
+import com.google.jetpackcamera.model.SaveMode
+import com.google.jetpackcamera.model.VideoCaptureEvent
+import com.google.jetpackcamera.ui.controller.CaptureController
+import com.google.jetpackcamera.ui.controller.ImageWellController
+import com.google.jetpackcamera.ui.controller.impl.Utils.nextSaveLocation
+import com.google.jetpackcamera.ui.uistate.capture.TrackedCaptureUiState
+import kotlin.coroutines.CoroutineContext
+import kotlinx.atomicfu.atomic
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.job
+import kotlinx.coroutines.launch
+
+private const val TAG = "CaptureButtonControllerImpl"
+
+private const val IMAGE_CAPTURE_TRACE = "JCA Image Capture"
+
+/**
+ * Implementation of [CaptureController] that interacts with [CameraSystem].
+ *
+ * @param trackedCaptureUiState State for tracking UI changes during capture.
+ * @param cameraSystemProvider Provider for the initialized [CameraSystem].
+ * @param saveMode Mode for saving captured media.
+ * @param externalCaptureMode Mode for external capture requests.
+ * @param externalCapturesCallback Callback for getting external capture information.
+ * @property captureEvents Channel for sending capture-related events.
+ * @param imageWellController Controller for managing the image well UI.
+ * @param onImageCached Callback invoked when an image is saved to cache.
+ * @param onVideoCached Callback invoked when a video is saved to cache.
+ * @param coroutineContext The [CoroutineContext] for launching coroutines.
+ */
+class CaptureControllerImpl(
+    private val trackedCaptureUiState: MutableStateFlow<TrackedCaptureUiState>,
+    private val cameraSystemProvider: suspend () -> CameraSystem,
+    private val saveMode: SaveMode,
+    private val externalCaptureMode: ExternalCaptureMode,
+    private val externalCapturesCallback: () -> Pair<SaveLocation, IntProgress?>,
+    override val captureEvents: Channel<CaptureEvent>,
+    private val imageWellController: ImageWellController? = null,
+    private val onImageCached: ((Uri) -> Unit)? = null,
+    private val onVideoCached: ((Uri) -> Unit)? = null,
+    coroutineContext: CoroutineContext
+) : CaptureController {
+
+    private val traceCookie = atomic(0)
+    private val videoCaptureStartedCount = atomic(0)
+    private var recordingJob: Job? = null
+    private val job = Job(parent = coroutineContext[Job])
+    private val scope = CoroutineScope(coroutineContext + job)
+
+    override fun captureImage(contentResolver: ContentResolver) {
+        if (externalCaptureMode == ExternalCaptureMode.VideoCapture) {
+            captureEvents.trySend(ImageCaptureEvent.ImageCaptureExternalUnsupported)
+            return
+        }
+        Log.d(TAG, "captureImage")
+        scope.launch {
+            val (saveLocation, progress) = nextSaveLocation(
+                saveMode,
+                externalCaptureMode,
+                externalCapturesCallback
+            )
+            captureImageInternal(
+                saveLocation = saveLocation,
+                doTakePicture = {
+                    cameraSystemProvider().takePicture(contentResolver, saveLocation) {
+                        trackedCaptureUiState.update { old ->
+                            old.copy(lastBlinkTimeStamp = System.currentTimeMillis())
+                        }
+                    }.savedUri
+                },
+                onSuccess = { savedUri ->
+                    val event = if (progress != null) {
+                        ImageCaptureEvent.SequentialImageSaved(savedUri, progress)
+                    } else {
+                        if (saveLocation is SaveLocation.Cache) {
+                            ImageCaptureEvent.SingleImageCached(savedUri)
+                        } else {
+                            ImageCaptureEvent.SingleImageSaved(savedUri)
+                        }
+                    }
+                    if (saveLocation !is SaveLocation.Cache) {
+                        imageWellController?.updateLastCapturedMedia()
+                    } else {
+                        savedUri?.let { uri ->
+                            onImageCached?.invoke(uri)
+                        }
+                    }
+                    captureEvents.trySend(event)
+                },
+                onFailure = { exception ->
+                    val event = if (progress != null) {
+                        ImageCaptureEvent.SequentialImageCaptureError(exception, progress)
+                    } else {
+                        ImageCaptureEvent.SingleImageCaptureError(exception)
+                    }
+
+                    captureEvents.trySend(event)
+                }
+            )
+        }
+    }
+
+    override fun startVideoRecording() {
+        if (externalCaptureMode == ExternalCaptureMode.ImageCapture) {
+            Log.d(TAG, "externalVideoRecording")
+            captureEvents.trySend(VideoCaptureEvent.VideoCaptureExternalUnsupported)
+            return
+        }
+        Log.d(TAG, "startVideoRecording")
+        recordingJob = scope.launch {
+            val (saveLocation, _) = nextSaveLocation(
+                saveMode,
+                externalCaptureMode,
+                externalCapturesCallback
+            )
+            try {
+                cameraSystemProvider().startVideoRecording(saveLocation) {
+                    when (it) {
+                        is OnVideoRecordEvent.OnVideoRecorded -> {
+                            Log.d(TAG, "cameraSystem.startRecording OnVideoRecorded")
+                            val event = if (saveLocation is SaveLocation.Cache) {
+                                VideoCaptureEvent.VideoCached(it.savedUri)
+                            } else {
+                                VideoCaptureEvent.VideoSaved(it.savedUri)
+                            }
+
+                            if (saveLocation !is SaveLocation.Cache) {
+                                imageWellController?.updateLastCapturedMedia()
+                            } else {
+                                onVideoCached?.invoke(it.savedUri)
+                            }
+
+                            captureEvents.trySend(event)
+                        }
+
+                        is OnVideoRecordEvent.OnVideoRecordError -> {
+                            Log.d(TAG, "cameraSystem.startRecording OnVideoRecordError")
+                            captureEvents.trySend(VideoCaptureEvent.VideoCaptureError(it.error))
+                        }
+                    }
+                }
+                Log.d(TAG, "cameraSystem.startRecording success")
+            } catch (exception: IllegalStateException) {
+                Log.d(TAG, "cameraSystem.startVideoRecording error", exception)
+            }
+        }
+    }
+
+    override fun stopVideoRecording() {
+        Log.d(TAG, "stopVideoRecording")
+        recordingJob?.cancel()
+        recordingJob = null
+        scope.launch {
+            cameraSystemProvider().stopVideoRecording()
+        }
+    }
+
+    private suspend fun <T> captureImageInternal(
+        saveLocation: SaveLocation,
+        doTakePicture: suspend () -> T,
+        onSuccess: (T) -> Unit = {},
+        onFailure: (exception: Exception) -> Unit = {}
+    ) {
+        val cookieInt = traceCookie.incrementAndGet()
+        try {
+            val result = traceAsync(IMAGE_CAPTURE_TRACE, cookieInt) {
+                doTakePicture()
+            }
+            onSuccess(result)
+            Log.d(TAG, "cameraSystem.takePicture success")
+        } catch (exception: Exception) {
+            onFailure(exception)
+            Log.d(TAG, "cameraSystem.takePicture error", exception)
+        }
+    }
+
+    override fun setLockedRecording(isLocked: Boolean) {
+        trackedCaptureUiState.update { old ->
+            old.copy(isRecordingLocked = isLocked)
+        }
+    }
+
+    override fun setPaused(shouldBePaused: Boolean) {
+        scope.launch {
+            if (shouldBePaused) {
+                cameraSystemProvider().pauseVideoRecording()
+            } else {
+                cameraSystemProvider().resumeVideoRecording()
+            }
+        }
+    }
+
+    override fun setAudioEnabled(shouldEnableAudio: Boolean) {
+        scope.launch {
+            cameraSystemProvider().setAudioEnabled(shouldEnableAudio)
+        }
+
+        Log.d(
+            TAG,
+            "Toggle Audio: $shouldEnableAudio"
+        )
+    }
+
+    /**
+     * Initiates the cancellation of this controller's scope and returns its Job.
+     * To wait for cancellation to complete, call .join() on the returned Job.
+     */
+    fun cancelScope(): Job {
+        scope.cancel()
+        return scope.coroutineContext.job
+    }
+}

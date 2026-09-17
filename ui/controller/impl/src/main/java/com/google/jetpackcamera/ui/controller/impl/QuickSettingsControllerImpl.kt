@@ -1,0 +1,92 @@
+/*
+ * Copyright (C) 2026 The Android Open Source Project
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *      http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+package com.google.jetpackcamera.ui.controller.impl
+
+import com.google.jetpackcamera.core.camera.CameraSystem
+import com.google.jetpackcamera.model.AspectRatio
+import com.google.jetpackcamera.model.CaptureMode
+import com.google.jetpackcamera.model.DynamicRange
+import com.google.jetpackcamera.model.FlashMode
+import com.google.jetpackcamera.model.ImageOutputFormat
+import com.google.jetpackcamera.model.LensFacing
+import com.google.jetpackcamera.ui.controller.quicksettings.QuickSettingsController
+import kotlin.coroutines.CoroutineContext
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.job
+import kotlinx.coroutines.launch
+
+/**
+ * Implementation of [QuickSettingsController] that interacts with [CameraSystem].
+ *
+ * @param cameraSystemProvider The suspending provider for the [CameraSystem].
+ * @param coroutineContext The [CoroutineContext] for launching coroutines.
+ */
+class QuickSettingsControllerImpl(
+    private val cameraSystemProvider: suspend () -> CameraSystem,
+    coroutineContext: CoroutineContext
+) : QuickSettingsController {
+    private val job = Job(parent = coroutineContext[Job.Key])
+    private val scope = CoroutineScope(coroutineContext + job)
+
+    override fun setLensFacing(lensFace: LensFacing) {
+        scope.launch {
+            // apply to cameraSystem
+            cameraSystemProvider().setLensFacing(lensFace)
+        }
+    }
+
+    override fun setFlash(flashMode: FlashMode) {
+        scope.launch {
+            // apply to cameraSystem
+            cameraSystemProvider().setFlashMode(flashMode)
+        }
+    }
+
+    override fun setAspectRatio(aspectRatio: AspectRatio) {
+        scope.launch {
+            cameraSystemProvider().setAspectRatio(aspectRatio)
+        }
+    }
+
+    override fun setDynamicRange(dynamicRange: DynamicRange) {
+        scope.launch {
+            cameraSystemProvider().setDynamicRange(dynamicRange)
+        }
+    }
+
+    override fun setImageFormat(imageOutputFormat: ImageOutputFormat) {
+        scope.launch {
+            cameraSystemProvider().setImageFormat(imageOutputFormat)
+        }
+    }
+
+    override fun setCaptureMode(captureMode: CaptureMode) {
+        scope.launch {
+            cameraSystemProvider().setCaptureMode(captureMode)
+        }
+    }
+
+    /**
+     * Initiates the cancellation of this controller's scope and returns its Job.
+     * To wait for cancellation to complete, call .join() on the returned Job.
+     */
+    fun cancelScope(): Job {
+        scope.cancel()
+        return scope.coroutineContext.job
+    }
+}
