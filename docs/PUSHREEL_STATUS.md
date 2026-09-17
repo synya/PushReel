@@ -64,10 +64,12 @@ Verified on 2026-09-17:
   to the same Wi-Fi network. The initial zero-peer result was caused by missing local
   network access on the MacBook; after correcting that permission, PushReel detected
   the peer without requiring a Link Audio stream.
+- Link Audio channel discovery was also verified against the channels published by
+  the user's Ableton Live template project. PushReel displayed the expected channel
+  list.
 
-Still to verify manually: discovery of a real Push 3 Link Audio channel, Link lifecycle
-across background/foreground transitions, Gallery playback over longer recordings,
-and all future external-audio behavior.
+Still to verify manually: Link lifecycle across background/foreground transitions,
+Gallery playback over longer recordings, and all future external-audio behavior.
 
 On the tested Samsung phone, use `./scripts/install-debug-owner.ps1` for deployment
 to its main profile (`userId 0`). It passes `--user 0` to ADB and verifies that no
