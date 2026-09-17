@@ -14,6 +14,12 @@ See [development status](docs/PUSHREEL_STATUS.md) and [project requirements](AGE
 The upstream documentation and license notices are retained below. Its feature list
 describes the camera base, not completed PushReel Link Audio functionality.
 
+On the tested Samsung phone, the main profile is Android `userId 0`. Install and
+verify the debug APK only for that user with `./scripts/install-debug-owner.ps1`.
+The script reports existing installations in additional profiles instead of deleting
+their app data. A plain `adb install` can make the package available to Samsung Dual
+Messenger and Secure Folder profiles.
+
 ---
 
 <img src="docs/images/readme-banner-uhdr.jpg" alt="Jetpack Camera App Banner" width="2560" height="1440" style="width: 100%; height: auto; border-radius: 3.125% / 5.56%;">

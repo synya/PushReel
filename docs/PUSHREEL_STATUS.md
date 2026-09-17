@@ -43,3 +43,8 @@ Verified on 2026-09-17:
 
 Still to verify manually: photo capture, video recording, Gallery playback, and
 longer lifecycle behavior. No Link Audio behavior is available to verify yet.
+
+On the tested Samsung phone, use `./scripts/install-debug-owner.ps1` for deployment
+to its main profile (`userId 0`). It passes `--user 0` to ADB and verifies that no
+other Android user is marked as installed. Existing secondary-profile installations
+are reported and left untouched to avoid deleting their app data.
