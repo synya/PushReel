@@ -34,6 +34,7 @@ import com.google.jetpackcamera.settings.testing.FakeSettingsRepository
 import com.google.jetpackcamera.ui.uistate.capture.FlashModeUiState
 import com.google.jetpackcamera.ui.uistate.capture.FlipLensUiState
 import com.google.jetpackcamera.ui.uistate.capture.compound.CaptureUiState
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -70,17 +71,20 @@ class PreviewViewModelTest {
         updateSystemConstraints(TYPICAL_SYSTEM_CONSTRAINTS)
     }
     private lateinit var previewViewModel: PreviewViewModel
+    private lateinit var linkAudioController: FakeLinkAudioController
 
     @Before
     fun setup() = runTest(StandardTestDispatcher()) {
         Dispatchers.setMain(StandardTestDispatcher())
+        linkAudioController = FakeLinkAudioController()
         previewViewModel = PreviewViewModel(
             cameraSystemRepository = cameraSystemRepository,
             constraintsRepository = constraintsRepository,
             settingsRepository = FakeSettingsRepository(),
             mediaRepository = FakeMediaRepository(),
             savedStateHandle = SavedStateHandle(),
-            defaultSaveMode = SaveMode.Immediate
+            defaultSaveMode = SaveMode.Immediate,
+            linkAudioController = linkAudioController
         )
         advanceUntilIdle()
     }
@@ -183,10 +187,46 @@ class PreviewViewModelTest {
         assertThat(cameraSystem.isLensFacingFront).isTrue()
     }
 
+    @Test
+    fun linkAudioCommandsAreForwarded() {
+        previewViewModel.startLinkAudio()
+        previewViewModel.setLinkAudioEnabled(true)
+        previewViewModel.selectLinkAudioChannel("main")
+        previewViewModel.stopLinkAudio()
+
+        assertThat(linkAudioController.startedCount).isEqualTo(1)
+        assertThat(linkAudioController.stoppedCount).isEqualTo(1)
+        assertThat(linkAudioController.enabledValues).containsExactly(true)
+        assertThat(linkAudioController.selectedChannelIds).containsExactly("main")
+    }
+
     private fun TestScope.startCameraUntilRunning() {
         previewViewModel.cameraController.startCamera()
         advanceUntilIdle()
     }
+}
+
+private class FakeLinkAudioController : LinkAudioController {
+    private val state = MutableStateFlow(LinkAudioUiState())
+    var startedCount = 0
+    var stoppedCount = 0
+    val enabledValues = mutableListOf<Boolean>()
+    val selectedChannelIds = mutableListOf<String>()
+
+    override fun uiState(scope: CoroutineScope): StateFlow<LinkAudioUiState> = state
+    override fun onStart() {
+        startedCount++
+    }
+    override fun onStop() {
+        stoppedCount++
+    }
+    override fun setEnabled(enabled: Boolean) {
+        enabledValues += enabled
+    }
+    override fun selectChannel(channelId: String) {
+        selectedChannelIds += channelId
+    }
+    override fun close() = Unit
 }
 
 private fun assertIsReady(viewFinderUiState: CaptureUiState): CaptureUiState.Ready =

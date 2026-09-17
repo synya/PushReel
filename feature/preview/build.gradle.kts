@@ -145,6 +145,7 @@ dependencies {
     implementation(project(":data:settings"))
     implementation(project(":core:settings"))
     implementation(project(":core:model"))
+    implementation(project(":linkaudio"))
     testImplementation(project(":core:camera:testing"))
     testImplementation(project(":data:settings:testing"))
     testImplementation(project(":data:media:testing"))

@@ -29,6 +29,7 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
@@ -36,11 +37,15 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.size
 import androidx.compose.material3.BottomSheetScaffoldState
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.RadioButton
 import androidx.compose.material3.SheetValue
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.rememberBottomSheetScaffoldState
 import androidx.compose.material3.rememberStandardBottomSheetState
@@ -148,6 +153,7 @@ fun PreviewScreen(
     val rawUiState = viewModel.captureUiState.collectAsState()
     val debugUiState: DebugUiState by viewModel.debugUiState.collectAsState()
     val snackBarUiState: SnackBarUiState by viewModel.snackBarUiState.collectAsState()
+    val linkAudioUiState: LinkAudioUiState by viewModel.linkAudioUiState.collectAsState()
 
     val isReady by remember { derivedStateOf { rawUiState.value is CaptureUiState.Ready } }
 
@@ -156,8 +162,10 @@ fun PreviewScreen(
 
     LifecycleStartEffect(Unit) {
         viewModel.cameraController.startCamera()
+        viewModel.startLinkAudio()
         onStopOrDispose {
             viewModel.cameraController.stopCamera()
+            viewModel.stopLinkAudio()
         }
     }
 
@@ -226,7 +234,10 @@ fun PreviewScreen(
             imageWellController = viewModel.imageWellController,
             cameraController = viewModel.cameraController,
             screenFlashController = viewModel.screenFlashController,
-            zoomController = viewModel.zoomController
+            zoomController = viewModel.zoomController,
+            linkAudioUiState = linkAudioUiState,
+            onSetLinkAudioEnabled = viewModel::setLinkAudioEnabled,
+            onSelectLinkAudioChannel = viewModel::selectLinkAudioChannel
         )
         val readStoragePermission: PermissionState = rememberPermissionState(
             Manifest.permission.READ_EXTERNAL_STORAGE
@@ -260,7 +271,10 @@ private fun ContentScreen(
     imageWellController: ImageWellController? = null,
     cameraController: CameraController? = null,
     screenFlashController: ScreenFlashController? = null,
-    zoomController: ZoomController? = null
+    zoomController: ZoomController? = null,
+    linkAudioUiState: LinkAudioUiState = LinkAudioUiState(),
+    onSetLinkAudioEnabled: (Boolean) -> Unit = {},
+    onSelectLinkAudioChannel: (String) -> Unit = {}
 ) {
     val currentCaptureUiStateProvider by rememberUpdatedState(captureUiStateProvider)
     val flipLensState =
@@ -423,6 +437,21 @@ private fun ContentScreen(
             StabilizationIcon(
                 modifier = modifier,
                 stabilizationUiState = stabilizationState.value
+            )
+        }
+    }
+
+    val linkAudioIndicatorLambda = remember(
+        linkAudioUiState,
+        onSetLinkAudioEnabled,
+        onSelectLinkAudioChannel
+    ) {
+        @Composable { modifier: Modifier ->
+            LinkAudioIndicator(
+                modifier = modifier,
+                uiState = linkAudioUiState,
+                onSetEnabled = onSetLinkAudioEnabled,
+                onSelectChannel = onSelectLinkAudioChannel
             )
         }
     }
@@ -772,6 +801,7 @@ private fun ContentScreen(
         flashModeIndicator = flashModeIndicatorLambda,
         videoQualityIndicator = videoQualityIndicatorLambda,
         stabilizationIndicator = stabilizationIndicatorLambda,
+        linkAudioIndicator = linkAudioIndicatorLambda,
 
         viewfinder = viewfinderLambda,
         captureButton = captureButtonLambda,
@@ -821,6 +851,7 @@ private fun LayoutWrapper(
     hdrIndicator: @Composable (modifier: Modifier) -> Unit,
     videoQualityIndicator: @Composable (modifier: Modifier) -> Unit,
     stabilizationIndicator: @Composable (modifier: Modifier) -> Unit,
+    linkAudioIndicator: @Composable (modifier: Modifier) -> Unit,
     pauseToggleButton: @Composable (modifier: Modifier) -> Unit,
     audioToggleButton: @Composable (modifier: Modifier) -> Unit,
     captureModeToggle: @Composable (modifier: Modifier) -> Unit,
@@ -858,6 +889,7 @@ private fun LayoutWrapper(
                 hdrIndicator(Modifier)
                 videoQualityIndicator(Modifier)
                 stabilizationIndicator(Modifier)
+                linkAudioIndicator(Modifier)
             }
         },
         debugOverlay = { modifier ->
@@ -873,6 +905,76 @@ private fun LayoutWrapper(
         screenFlashOverlay = screenFlashOverlay,
         snackBar = snackBar
     )
+}
+
+@Composable
+private fun LinkAudioIndicator(
+    uiState: LinkAudioUiState,
+    onSetEnabled: (Boolean) -> Unit,
+    onSelectChannel: (String) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    var expanded by remember { mutableStateOf(false) }
+    val statusColor = when {
+        uiState.error != null -> MaterialTheme.colorScheme.error
+        uiState.linkEnabled -> MaterialTheme.colorScheme.primary
+        uiState.requestedEnabled -> MaterialTheme.colorScheme.tertiary
+        else -> Color.White
+    }
+
+    Box(modifier = modifier) {
+        TextButton(onClick = { expanded = true }) {
+            Text(text = "LINK", color = statusColor)
+        }
+        DropdownMenu(
+            expanded = expanded,
+            onDismissRequest = { expanded = false }
+        ) {
+            DropdownMenuItem(
+                text = {
+                    Text(
+                        if (uiState.requestedEnabled) {
+                            "Turn Link Audio off"
+                        } else {
+                            "Turn Link Audio on"
+                        }
+                    )
+                },
+                onClick = {
+                    onSetEnabled(!uiState.requestedEnabled)
+                }
+            )
+            DropdownMenuItem(
+                text = {
+                    Text(
+                        when {
+                            uiState.error != null -> uiState.error
+                            !uiState.requestedEnabled -> "Discovery is off"
+                            uiState.channels.isEmpty() -> "${uiState.peerCount} peers · no channels"
+                            else -> "${uiState.peerCount} peers · ${uiState.channels.size} channels"
+                        }
+                    )
+                },
+                enabled = false,
+                onClick = {}
+            )
+            uiState.channels.forEach { channel ->
+                DropdownMenuItem(
+                    text = { Text("${channel.peerName} · ${channel.name}") },
+                    leadingIcon = {
+                        RadioButton(
+                            selected = channel.id == uiState.selectedChannelId,
+                            onClick = null
+                        )
+                    },
+                    onClick = {
+                        onSelectChannel(channel.id)
+                        expanded = false
+                    }
+                )
+            }
+        }
+    }
 }
 
 @Preview

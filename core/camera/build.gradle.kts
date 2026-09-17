@@ -20,6 +20,7 @@ plugins {
 
 android {
     namespace = "com.google.jetpackcamera.core.camera"
+    ndkVersion = libs.versions.ndk.get()
     compileSdk {
         version = release(libs.versions.compileSdk.get().toInt()) {
             minorApiLevel = libs.versions.compileSdkMinor.get().toInt()

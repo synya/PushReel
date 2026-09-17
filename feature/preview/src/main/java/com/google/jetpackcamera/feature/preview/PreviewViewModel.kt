@@ -93,7 +93,8 @@ class PreviewViewModel @Inject constructor(
     private val defaultSaveMode: SaveMode,
     private val settingsRepository: SettingsRepository,
     private val constraintsRepository: SettableConstraintsRepository,
-    private val mediaRepository: MediaRepository
+    private val mediaRepository: MediaRepository,
+    private val linkAudioController: LinkAudioController
 ) : ViewModel() {
     private val saveMode: SaveMode = savedStateHandle.getRequestedSaveMode() ?: defaultSaveMode
     private val trackedCaptureUiState: MutableStateFlow<TrackedCaptureUiState> =
@@ -105,6 +106,17 @@ class PreviewViewModel @Inject constructor(
 
     val surfaceRequest: StateFlow<SurfaceRequest?> =
         cameraSystemRepository.surfaceRequest
+
+    val linkAudioUiState: StateFlow<LinkAudioUiState> =
+        linkAudioController.uiState(viewModelScope)
+
+    fun startLinkAudio() = linkAudioController.onStart()
+
+    fun stopLinkAudio() = linkAudioController.onStop()
+
+    fun setLinkAudioEnabled(enabled: Boolean) = linkAudioController.setEnabled(enabled)
+
+    fun selectLinkAudioChannel(channelId: String) = linkAudioController.selectChannel(channelId)
 
     private val outgoingCaptureEvents = Channel<CaptureEvent>(capacity = Channel.UNLIMITED)
     val captureEvents: ReceiveChannel<CaptureEvent> = outgoingCaptureEvents
@@ -328,5 +340,10 @@ class PreviewViewModel @Inject constructor(
                 )
             )
         }
+    }
+
+    override fun onCleared() {
+        linkAudioController.close()
+        super.onCleared()
     }
 }
