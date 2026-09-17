@@ -167,6 +167,17 @@ The reviewer should focus on:
 * error paths
 * regressions
 
+Use **UI Designer** for visual design tasks involving typography,
+spacing, hierarchy, colors, controls, recording states, and
+component consistency.
+
+The **UI Designer** should define the visual direction and component
+specification. Mobile App Builder implements the design in Jetpack
+Compose.
+
+Do not allow visual redesign to change recording architecture,
+state ownership, or native/media boundaries.
+
 By default, the reviewer should report findings rather than modify code.
 
 ### Preferred Workflow
