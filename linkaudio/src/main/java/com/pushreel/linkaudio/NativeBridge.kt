@@ -21,6 +21,9 @@ internal interface NativeBridge {
     fun setEnabled(handle: Long, enabled: Boolean)
     fun getStatus(handle: Long): LongArray
     fun getChannels(handle: Long): Array<ByteArray>
+    fun selectChannel(handle: Long, channelIdUtf8: ByteArray?)
+    fun readAudioFrames(handle: Long, destination: ShortArray, requestedFrames: Int): LongArray?
+    fun getAudioStatus(handle: Long): LongArray
 }
 
 internal object JniNativeBridge : NativeBridge {
@@ -37,10 +40,25 @@ internal object JniNativeBridge : NativeBridge {
     override fun setEnabled(handle: Long, enabled: Boolean) = nativeSetEnabled(handle, enabled)
     override fun getStatus(handle: Long): LongArray = nativeGetStatus(handle)
     override fun getChannels(handle: Long): Array<ByteArray> = nativeGetChannels(handle)
+    override fun selectChannel(handle: Long, channelIdUtf8: ByteArray?) =
+        nativeSelectChannel(handle, channelIdUtf8)
+    override fun readAudioFrames(
+        handle: Long,
+        destination: ShortArray,
+        requestedFrames: Int
+    ): LongArray? = nativeReadAudioFrames(handle, destination, requestedFrames)
+    override fun getAudioStatus(handle: Long): LongArray = nativeGetAudioStatus(handle)
 
     private external fun nativeCreate(peerNameUtf8: ByteArray): Long
     private external fun nativeClose(handle: Long)
     private external fun nativeSetEnabled(handle: Long, enabled: Boolean)
     private external fun nativeGetStatus(handle: Long): LongArray
     private external fun nativeGetChannels(handle: Long): Array<ByteArray>
+    private external fun nativeSelectChannel(handle: Long, channelIdUtf8: ByteArray?)
+    private external fun nativeReadAudioFrames(
+        handle: Long,
+        destination: ShortArray,
+        requestedFrames: Int
+    ): LongArray?
+    private external fun nativeGetAudioStatus(handle: Long): LongArray
 }

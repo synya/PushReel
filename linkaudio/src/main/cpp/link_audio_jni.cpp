@@ -10,11 +10,16 @@
 
 #include <ableton/LinkAudio.hpp>
 
+#include "pcm_fifo.hpp"
+
+#include <algorithm>
 #include <array>
 #include <cstdint>
+#include <cstring>
 #include <iomanip>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <sstream>
 #include <string>
 #include <unordered_map>
@@ -23,8 +28,54 @@
 namespace {
 
 struct LinkInstance {
-  explicit LinkInstance(std::string peerName) : link(120.0, std::move(peerName)) {}
+  explicit LinkInstance(std::string peerName)
+      : link(120.0, std::move(peerName)), fifo(std::make_shared<pushreel::linkaudio::PcmFifo>()) {}
+
+  void select(const std::optional<ableton::ChannelId>& channelId) {
+    auto replacement = std::make_shared<pushreel::linkaudio::PcmFifo>();
+    std::lock_guard<std::mutex> lock(sourceMutex);
+    source.reset();
+    fifo = replacement;
+    if (channelId) {
+      source = std::make_unique<ableton::LinkAudioSource>(
+          link,
+          *channelId,
+          [replacement](const ableton::LinkAudioSource::BufferHandle buffer) noexcept {
+            pushreel::linkaudio::PcmFifo::BufferMetadata metadata{
+                buffer.info.count, buffer.info.sessionBeatTime, buffer.info.tempo, {}};
+            std::copy(
+                buffer.info.sessionId.begin(),
+                buffer.info.sessionId.end(),
+                metadata.sessionId.begin());
+            replacement->push(
+                buffer.samples,
+                buffer.info.numFrames,
+                buffer.info.numChannels,
+                buffer.info.sampleRate,
+                metadata);
+          });
+    }
+  }
+
+  void clearSource() {
+    std::lock_guard<std::mutex> lock(sourceMutex);
+    source.reset();
+  }
+
+  bool hasSource() const {
+    std::lock_guard<std::mutex> lock(sourceMutex);
+    return source != nullptr;
+  }
+
+  std::shared_ptr<pushreel::linkaudio::PcmFifo> fifoSnapshot() const {
+    std::lock_guard<std::mutex> lock(sourceMutex);
+    return fifo;
+  }
+
   ableton::LinkAudio link;
+  std::shared_ptr<pushreel::linkaudio::PcmFifo> fifo;
+  mutable std::mutex sourceMutex;
+  std::unique_ptr<ableton::LinkAudioSource> source;
 };
 
 std::mutex gRegistryMutex;
@@ -107,6 +158,42 @@ std::string idToHex(const ableton::link_audio::Id& id) {
   return stream.str();
 }
 
+std::optional<ableton::ChannelId> parseChannelId(const std::string& value) {
+  if (value.size() != 16) {
+    return std::nullopt;
+  }
+  ableton::ChannelId result{};
+  const auto nibble = [](const char character) -> int {
+    if (character >= '0' && character <= '9') return character - '0';
+    if (character >= 'a' && character <= 'f') return character - 'a' + 10;
+    if (character >= 'A' && character <= 'F') return character - 'A' + 10;
+    return -1;
+  };
+  for (std::size_t index = 0; index < result.size(); ++index) {
+    const auto high = nibble(value[index * 2]);
+    const auto low = nibble(value[index * 2 + 1]);
+    if (high < 0 || low < 0) return std::nullopt;
+    result[index] = static_cast<std::uint8_t>((high << 4) | low);
+  }
+  return result;
+}
+
+jlong unsignedToJavaLong(const std::uint32_t value) noexcept {
+  return static_cast<jlong>(static_cast<std::uint64_t>(value));
+}
+
+jlong doubleBits(const double value) noexcept {
+  std::uint64_t bits = 0;
+  std::memcpy(&bits, &value, sizeof(bits));
+  return static_cast<jlong>(bits);
+}
+
+jlong packId(const std::array<std::uint8_t, 8>& id) noexcept {
+  std::uint64_t packed = 0;
+  for (const auto byte : id) packed = (packed << 8) | byte;
+  return static_cast<jlong>(packed);
+}
+
 }  // namespace
 
 extern "C" JNIEXPORT jlong JNICALL
@@ -143,6 +230,11 @@ Java_com_pushreel_linkaudio_JniNativeBridge_nativeClose(JNIEnv*, jobject, jlong 
       gInstances.erase(it);
     }
     try {
+      removed->clearSource();
+    } catch (...) {
+      logCurrentException("clear Link Audio source during close");
+    }
+    try {
       removed->link.enableLinkAudio(false);
     } catch (...) {
       logCurrentException("disable Link Audio during close");
@@ -155,6 +247,93 @@ Java_com_pushreel_linkaudio_JniNativeBridge_nativeClose(JNIEnv*, jobject, jlong 
     removed.reset();
   } catch (...) {
     logCurrentException("close");
+  }
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_pushreel_linkaudio_JniNativeBridge_nativeSelectChannel(
+    JNIEnv* env, jobject, jlong handle, jbyteArray channelId) {
+  try {
+    const auto instance = findInstance(env, handle);
+    if (!instance) return;
+    if (channelId == nullptr) {
+      instance->select(std::nullopt);
+      return;
+    }
+    const auto parsed = parseChannelId(fromJavaBytes(env, channelId));
+    if (!parsed) {
+      throwJava(env, "java/lang/IllegalArgumentException", "Channel ID must be 16 hexadecimal characters");
+      return;
+    }
+    instance->select(parsed);
+  } catch (...) {
+    translateCurrentException(env, "Unable to select Link Audio channel");
+  }
+}
+
+extern "C" JNIEXPORT jlongArray JNICALL
+Java_com_pushreel_linkaudio_JniNativeBridge_nativeReadAudioFrames(
+    JNIEnv* env, jobject, jlong handle, jshortArray destination, jint requestedFrames) {
+  try {
+    const auto instance = findInstance(env, handle);
+    if (!instance || destination == nullptr || requestedFrames <= 0) return nullptr;
+    const auto destinationSamples = env->GetArrayLength(destination);
+    const auto destinationFrames = destinationSamples / 2;
+    const auto frames = std::min(requestedFrames, destinationFrames);
+    if (frames <= 0) return nullptr;
+    auto* output = env->GetShortArrayElements(destination, nullptr);
+    if (output == nullptr) return nullptr;
+    const auto read =
+        instance->fifoSnapshot()->read(output, static_cast<std::uint32_t>(frames));
+    env->ReleaseShortArrayElements(destination, output, 0);
+    const std::array<jlong, 8> values{
+        unsignedToJavaLong(read.frames),
+        unsignedToJavaLong(read.bufferOffsetFrames),
+        unsignedToJavaLong(read.bufferFrames),
+        unsignedToJavaLong(read.sampleRate),
+        static_cast<jlong>(read.metadata.count),
+        doubleBits(read.metadata.sessionBeatTime),
+        doubleBits(read.metadata.tempo),
+        packId(read.metadata.sessionId)};
+    const auto result = env->NewLongArray(static_cast<jsize>(values.size()));
+    if (result != nullptr) {
+      env->SetLongArrayRegion(result, 0, static_cast<jsize>(values.size()), values.data());
+    }
+    return result;
+  } catch (...) {
+    translateCurrentException(env, "Unable to read Link Audio PCM");
+    return nullptr;
+  }
+}
+
+extern "C" JNIEXPORT jlongArray JNICALL
+Java_com_pushreel_linkaudio_JniNativeBridge_nativeGetAudioStatus(
+    JNIEnv* env, jobject, jlong handle) {
+  try {
+    const auto instance = findInstance(env, handle);
+    if (!instance) return nullptr;
+    const auto status = instance->fifoSnapshot()->status();
+    const std::array<jlong, 12> values{
+        instance->hasSource() ? 1 : 0,
+        unsignedToJavaLong(status.sampleRate),
+        pushreel::linkaudio::PcmFifo::kOutputChannels,
+        unsignedToJavaLong(status.bufferedFrames),
+        pushreel::linkaudio::PcmFifo::kCapacityFrames,
+        unsignedToJavaLong(status.receivedFrames),
+        unsignedToJavaLong(status.readFrames),
+        unsignedToJavaLong(status.droppedFrames),
+        unsignedToJavaLong(status.overflowCount),
+        unsignedToJavaLong(status.underrunFrames),
+        unsignedToJavaLong(status.underrunCount),
+        unsignedToJavaLong(status.invalidBufferCount)};
+    const auto result = env->NewLongArray(static_cast<jsize>(values.size()));
+    if (result != nullptr) {
+      env->SetLongArrayRegion(result, 0, static_cast<jsize>(values.size()), values.data());
+    }
+    return result;
+  } catch (...) {
+    translateCurrentException(env, "Unable to read Link Audio PCM status");
+    return nullptr;
   }
 }
 

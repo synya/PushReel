@@ -53,4 +53,44 @@ class LinkAudioModelsTest {
             )
         }
     }
+
+    @Test
+    fun decodePcmStatus_mapsDiagnostics() {
+        val status = decodePcmStatus(
+            longArrayOf(1, 48_000, 2, 512, 96_000, 1_024, 512, 64, 2, 128, 1, 3)
+        )
+
+        assertThat(status.channelSelected).isTrue()
+        assertThat(status.sampleRate).isEqualTo(48_000)
+        assertThat(status.bufferedFrames).isEqualTo(512)
+        assertThat(status.droppedFrames).isEqualTo(64)
+        assertThat(status.overflowCount).isEqualTo(2)
+        assertThat(status.underrunFrames).isEqualTo(128)
+        assertThat(status.invalidBufferCount).isEqualTo(3)
+    }
+
+    @Test
+    fun decodePcmRead_preservesTimingAndFrameRange() {
+        val read = decodePcmRead(
+            longArrayOf(
+                128,
+                256,
+                512,
+                48_000,
+                99,
+                12.5.toBits(),
+                123.0.toBits(),
+                0x0102030405060708
+            )
+        )
+
+        assertThat(read.framesRead).isEqualTo(128)
+        assertThat(read.metadata?.bufferCount).isEqualTo(99)
+        assertThat(read.metadata?.sessionBeatTime).isEqualTo(12.5)
+        assertThat(read.metadata?.tempo).isEqualTo(123.0)
+        assertThat(read.metadata?.sessionId).isEqualTo("0102030405060708")
+        assertThat(read.metadata?.sampleRate).isEqualTo(48_000)
+        assertThat(read.metadata?.bufferFrames).isEqualTo(512)
+        assertThat(read.metadata?.offsetFrames).isEqualTo(256)
+    }
 }

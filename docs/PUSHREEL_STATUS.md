@@ -14,10 +14,13 @@ Kotlin, Compose, module structure, and existing camera recording path.
   structure to keep the initial fork focused.
 - Upstream source copyright headers and the Apache license are preserved.
 
-The first Link Audio discovery slice is now integrated. A dedicated native module
+The Link Audio discovery and PCM buffering slices are now integrated. A dedicated native module
 owns Ableton Link, acquires the Android Wi-Fi multicast lock only while discovery is
-enabled, and exposes peer/channel snapshots to the camera screen. The user can turn
-Link Audio discovery on or off and select a discovered channel.
+enabled, exposes peer/channel snapshots to the camera screen, subscribes to the selected
+channel, and copies stereo PCM plus Link timing metadata into bounded preallocated queues.
+The user can turn Link Audio discovery on or off and select a discovered channel. The
+camera menu shows source format, FIFO fill, overflow, underrun, dropped-frame, and
+invalid-buffer diagnostics.
 
 The inherited recording audio option still uses the phone microphone. Channel
 selection does not feed external PCM into the recorder yet, and Push 3 audio is not
@@ -25,19 +28,19 @@ written to video at this stage.
 
 ## Next implementation slice
 
-Add the native Link Audio source callback and a preallocated PCM FIFO with explicit
-overrun/underrun diagnostics. Keep the callback allocation-free and non-blocking,
-then expose coarse buffer reads through the existing narrow JNI boundary. Follow
-[AGENTS.md](../AGENTS.md) for realtime callback, timestamp, recording, and licensing
-requirements.
+Verify live PCM reception and FIFO diagnostics from the published Ableton channel on
+the physical phone. Then replace or extend the recording backend so video encoding is
+under application control and add AAC encoding from the buffered Link Audio PCM. The
+preserved Link buffer metadata must feed an explicit Link-to-Android monotonic time
+mapping before PCM is written to the encoder or muxer.
 
-External PCM buffering, AAC encoding, a shared audio/video timebase, custom recording
-coordination, and MP4 muxing remain future work. The existing CameraX Recorder is
-not an external PCM input path.
+AAC encoding, a shared audio/video timebase, custom recording coordination, and MP4
+muxing remain future work. The existing CameraX Recorder is not an external PCM input
+path.
 
 ## Verification
 
-Verified on 2026-09-17:
+Verified through 2026-09-18:
 
 - `:app:assembleStableDebug` completed successfully.
 - The project Spotless checks completed successfully against `upstream/main`.
@@ -52,6 +55,13 @@ Verified on 2026-09-17:
 - `:linkaudio:assembleStableDebug` completed successfully for `arm64-v8a`,
   `armeabi-v7a`, `x86`, and `x86_64`.
 - `:linkaudio:testStableDebugUnitTest` completed successfully.
+- `:feature:preview:testStableDebugUnitTest` completed successfully with channel
+  selection, stale-diagnostic, and visual-state coverage.
+- The host PCM FIFO test covers descriptor boundaries, overflow/underrun counters,
+  sample-rate changes, timing metadata, and unsigned ring-position wraparound.
+- Link Audio unit tests cover ordered selection/read operations, cancellation-safe
+  buffer ownership, a saturated command queue, repeated selection of the same channel,
+  and retry/release behavior after a failed native disable.
 - On the physical phone, the LINK control is visible, its menu opens, discovery turns
   on, and it turns off cleanly. The menu reports standard Link peers separately from
   advertised Link Audio channels so that a tempo peer is not confused with an audio
@@ -67,6 +77,9 @@ Verified on 2026-09-17:
 - Link Audio channel discovery was also verified against the channels published by
   the user's Ableton Live template project. PushReel displayed the expected channel
   list.
+- The updated debug APK was installed only for Android `userId 0`, launched on the
+  physical phone, showed the camera preview and the accessible Link Audio status
+  control, and remained running without a startup crash.
 
 Still to verify manually: Link lifecycle across background/foreground transitions,
 Gallery playback over longer recordings, and all future external-audio behavior.

@@ -30,22 +30,29 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.BottomSheetScaffoldState
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.SheetValue
 import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.rememberBottomSheetScaffoldState
 import androidx.compose.material3.rememberStandardBottomSheetState
@@ -66,6 +73,10 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
@@ -915,59 +926,114 @@ private fun LinkAudioIndicator(
     modifier: Modifier = Modifier
 ) {
     var expanded by remember { mutableStateOf(false) }
-    val statusColor = when {
-        uiState.error != null -> MaterialTheme.colorScheme.error
-        uiState.linkEnabled -> MaterialTheme.colorScheme.primary
-        uiState.requestedEnabled -> MaterialTheme.colorScheme.tertiary
-        else -> Color.White
-    }
+    val visualState = uiState.visualState()
+    val statusColor = visualState.color()
+    val selectedChannel = uiState.channels.firstOrNull { it.id == uiState.selectedChannelId }
 
     Box(modifier = modifier) {
-        TextButton(onClick = { expanded = true }) {
-            Text(text = "LINK", color = statusColor)
+        IconButton(
+            onClick = { expanded = true },
+            modifier = Modifier
+                .size(48.dp)
+                .semantics { contentDescription = visualState.contentDescription(uiState) }
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(40.dp)
+                    .background(Color.Black.copy(alpha = 0.56f), CircleShape),
+                contentAlignment = Alignment.Center
+            ) {
+                Text(
+                    text = "LINK",
+                    color = Color.White,
+                    style = MaterialTheme.typography.labelSmall,
+                    fontWeight = FontWeight.Bold,
+                    maxLines = 1
+                )
+                LinkAudioStatusBadge(
+                    visualState = visualState,
+                    color = statusColor
+                )
+            }
         }
         DropdownMenu(
             expanded = expanded,
-            onDismissRequest = { expanded = false }
+            onDismissRequest = { expanded = false },
+            modifier = Modifier.widthIn(min = 280.dp, max = 360.dp)
         ) {
             DropdownMenuItem(
                 text = {
-                    Text(
-                        if (uiState.requestedEnabled) {
-                            "Turn Link Audio off"
-                        } else {
-                            "Turn Link Audio on"
-                        }
+                    Column {
+                        Text("Link Audio", fontWeight = FontWeight.SemiBold)
+                        Text(
+                            text = visualState.menuSummary(uiState),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
+                },
+                trailingIcon = {
+                    Switch(
+                        checked = uiState.requestedEnabled,
+                        onCheckedChange = onSetEnabled
                     )
                 },
                 onClick = {
                     onSetEnabled(!uiState.requestedEnabled)
                 }
             )
-            DropdownMenuItem(
-                text = {
-                    Text(
-                        when {
-                            uiState.error != null -> uiState.error
-                            !uiState.requestedEnabled -> "Discovery is off"
-                            !uiState.linkEnabled -> "Starting Link discovery…"
-                            else -> "Link peers: ${uiState.peerCount}"
-                        }
-                    )
-                },
-                enabled = false,
-                onClick = {}
-            )
-            if (uiState.requestedEnabled && uiState.linkEnabled) {
+
+            if (uiState.error != null) {
                 DropdownMenuItem(
-                    text = { Text("Link Audio channels: ${uiState.channels.size}") },
+                    text = {
+                        Text(
+                            text = uiState.error,
+                            color = MaterialTheme.colorScheme.error,
+                            maxLines = 3,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    },
                     enabled = false,
                     onClick = {}
                 )
             }
+
+            if (selectedChannel != null) {
+                SelectedLinkAudioSource(
+                    channel = selectedChannel,
+                    uiState = uiState
+                )
+            }
+
+            if (uiState.requestedEnabled) {
+                HorizontalDivider()
+                Text(
+                    text = "CHANNELS",
+                    modifier = Modifier.padding(start = 16.dp, top = 12.dp, end = 16.dp),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
             uiState.channels.forEach { channel ->
                 DropdownMenuItem(
-                    text = { Text("${channel.peerName} · ${channel.name}") },
+                    text = {
+                        Column {
+                            Text(
+                                text = channel.name,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                            Text(
+                                text = channel.peerName,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
+                    },
                     leadingIcon = {
                         RadioButton(
                             selected = channel.id == uiState.selectedChannelId,
@@ -980,8 +1046,242 @@ private fun LinkAudioIndicator(
                     }
                 )
             }
+
+            if (uiState.requestedEnabled && uiState.channels.isEmpty()) {
+                DropdownMenuItem(
+                    text = {
+                        Text(
+                            text = if (uiState.linkEnabled) {
+                                "No Link Audio channels announced"
+                            } else {
+                                "Searching for Link Audio sources…"
+                            },
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    },
+                    enabled = false,
+                    onClick = {}
+                )
+            }
         }
     }
+}
+
+@Composable
+private fun BoxScope.LinkAudioStatusBadge(visualState: LinkAudioVisualState, color: Color) {
+    if (visualState == LinkAudioVisualState.Starting) {
+        CircularProgressIndicator(
+            modifier = Modifier
+                .align(Alignment.TopEnd)
+                .size(12.dp),
+            color = color,
+            strokeWidth = 2.dp
+        )
+    } else {
+        Box(
+            modifier = Modifier
+                .align(Alignment.TopEnd)
+                .size(11.dp)
+                .background(Color.Black.copy(alpha = 0.72f), CircleShape)
+                .padding(2.dp)
+                .background(color, CircleShape)
+        )
+    }
+}
+
+@Composable
+private fun SelectedLinkAudioSource(
+    channel: com.pushreel.linkaudio.LinkAudioChannel,
+    uiState: LinkAudioUiState
+) {
+    val pcm = uiState.pcmStatus
+    val format = pcm.formatDescription()
+    val hasWarning = pcm.hasWarning()
+
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 10.dp)
+    ) {
+        Text(
+            text = channel.name,
+            style = MaterialTheme.typography.titleSmall,
+            fontWeight = FontWeight.SemiBold,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
+        )
+        Text(
+            text = channel.peerName,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
+        )
+        Text(
+            text = format,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
+        )
+
+        if (pcm.channelSelected) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(top = 8.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = if (hasWarning) "Buffer warning" else "Buffer stable",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = if (hasWarning) {
+                        MaterialTheme.colorScheme.error
+                    } else {
+                        MaterialTheme.colorScheme.primary
+                    }
+                )
+                Text(
+                    text = "${pcm.bufferedFrames}/${pcm.capacityFrames}",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            LinearProgressIndicator(
+                progress = { pcm.fillFraction() },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(top = 4.dp),
+                color = if (hasWarning) {
+                    MaterialTheme.colorScheme.error
+                } else {
+                    MaterialTheme.colorScheme.primary
+                }
+            )
+            val diagnostics = pcm.nonZeroDiagnostics()
+            if (diagnostics.isNotEmpty()) {
+                Text(
+                    text = diagnostics.joinToString(" · "),
+                    modifier = Modifier.padding(top = 6.dp),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.error,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+        }
+    }
+}
+
+internal enum class LinkAudioVisualState {
+    Off,
+    Starting,
+    Available,
+    Waiting,
+    Ready,
+    Warning,
+    Error
+}
+
+internal fun LinkAudioUiState.visualState(): LinkAudioVisualState = when {
+    error != null -> LinkAudioVisualState.Error
+    !requestedEnabled -> LinkAudioVisualState.Off
+    !linkEnabled -> LinkAudioVisualState.Starting
+    selectedChannelId == null && channels.isNotEmpty() -> LinkAudioVisualState.Available
+    selectedChannelId == null -> LinkAudioVisualState.Waiting
+    pcmStatus.selectedChannelId != selectedChannelId -> LinkAudioVisualState.Waiting
+    !pcmStatus.channelSelected || pcmStatus.sampleRate <= 0 -> LinkAudioVisualState.Waiting
+    pcmStatus.hasWarning() -> LinkAudioVisualState.Warning
+    else -> LinkAudioVisualState.Ready
+}
+
+internal fun LinkAudioVisualState.contentDescription(uiState: LinkAudioUiState): String {
+    val selectedChannel = uiState.channels.firstOrNull { it.id == uiState.selectedChannelId }
+    val source = selectedChannel?.let { "${it.peerName}, ${it.name}" }
+    val format = uiState.pcmStatus.takeIf {
+        it.selectedChannelId == uiState.selectedChannelId && it.sampleRate > 0
+    }?.formatDescription()
+
+    return when (this) {
+        LinkAudioVisualState.Off -> "Link Audio off"
+        LinkAudioVisualState.Starting -> "Link Audio starting"
+        LinkAudioVisualState.Available -> "Link Audio sources available"
+        LinkAudioVisualState.Waiting -> source?.let { "Link Audio waiting for audio from $it" }
+            ?: "Link Audio waiting for a source"
+        LinkAudioVisualState.Ready -> listOfNotNull(
+            "Link Audio ready",
+            source,
+            format
+        ).joinToString(", ")
+        LinkAudioVisualState.Warning -> listOfNotNull(
+            "Link Audio buffer warning",
+            source,
+            format
+        ).joinToString(", ")
+        LinkAudioVisualState.Error -> "Link Audio error"
+    }
+}
+
+@Composable
+private fun LinkAudioVisualState.color(): Color = when (this) {
+    LinkAudioVisualState.Off -> MaterialTheme.colorScheme.onSurfaceVariant
+    LinkAudioVisualState.Starting -> MaterialTheme.colorScheme.tertiary
+    LinkAudioVisualState.Available -> MaterialTheme.colorScheme.secondary
+    LinkAudioVisualState.Waiting -> MaterialTheme.colorScheme.tertiary
+    LinkAudioVisualState.Ready -> MaterialTheme.colorScheme.primary
+    LinkAudioVisualState.Warning,
+    LinkAudioVisualState.Error -> MaterialTheme.colorScheme.error
+}
+
+private fun LinkAudioVisualState.menuSummary(uiState: LinkAudioUiState): String = when (this) {
+    LinkAudioVisualState.Off -> "Off"
+    LinkAudioVisualState.Starting -> "Starting discovery…"
+    LinkAudioVisualState.Available -> "${uiState.channels.size} sources available"
+    LinkAudioVisualState.Waiting -> if (uiState.selectedChannelId == null) {
+        "${uiState.peerCount} peers · waiting for channels"
+    } else {
+        "Waiting for audio"
+    }
+    LinkAudioVisualState.Ready -> "Ready"
+    LinkAudioVisualState.Warning -> "Audio buffer needs attention"
+    LinkAudioVisualState.Error -> "Error"
+}
+
+internal fun com.pushreel.linkaudio.LinkAudioPcmStatus.fillFraction(): Float =
+    if (capacityFrames > 0) {
+        (bufferedFrames.toFloat() / capacityFrames).coerceIn(0f, 1f)
+    } else {
+        0f
+    }
+
+internal fun com.pushreel.linkaudio.LinkAudioPcmStatus.hasWarning(): Boolean =
+    droppedFrames > 0 || overflowCount > 0 || underrunCount > 0 || invalidBufferCount > 0
+
+internal fun com.pushreel.linkaudio.LinkAudioPcmStatus.nonZeroDiagnostics(): List<String> =
+    buildList {
+        if (droppedFrames > 0) add("Dropped $droppedFrames")
+        if (overflowCount > 0) add("Overflows $overflowCount")
+        if (underrunCount > 0) add("Underruns $underrunCount")
+        if (invalidBufferCount > 0) add("Invalid $invalidBufferCount")
+    }
+
+private fun com.pushreel.linkaudio.LinkAudioPcmStatus.formatDescription(): String {
+    if (sampleRate <= 0) return "Waiting for stream format"
+    val sampleRateKhz = sampleRate / 1_000f
+    val rate = if (sampleRate % 1_000 == 0) {
+        "${sampleRate / 1_000} kHz"
+    } else {
+        "$sampleRateKhz kHz"
+    }
+    val channels = when (channelCount) {
+        1 -> "Mono"
+        2 -> "Stereo"
+        else -> "$channelCount channels"
+    }
+    return "$rate · $channels"
 }
 
 @Preview

@@ -16,7 +16,10 @@
 package com.pushreel.linkaudio
 
 import com.google.common.truth.Truth.assertThat
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.async
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runCurrent
@@ -51,7 +54,9 @@ class LinkAudioDelegateTest {
         assertThat(native.operations).isEmpty()
         runCurrent()
 
-        assertThat(native.operations).containsExactly("enable:true", "status", "channels").inOrder()
+        assertThat(native.operations)
+            .containsExactly("enable:true", "status", "channels", "audio-status")
+            .inOrder()
         assertThat(lock.acquireCount).isEqualTo(1)
         assertThat(delegate.status.value.peerCount).isEqualTo(2)
         delegate.close()
@@ -107,9 +112,80 @@ class LinkAudioDelegateTest {
 
         advanceTimeBy(1)
         runCurrent()
-        assertThat(native.operations).containsExactly("status", "channels")
+        assertThat(native.operations).containsExactly("status", "channels", "audio-status")
         delegate.close()
         runCurrent()
+    }
+
+    @Test
+    fun selectionAndPcmReadAreSerializedThroughActor() = runTest {
+        val native = FakeNativeBridge()
+        val delegate = createDelegate(native)
+        runCurrent()
+        native.operations.clear()
+        native.readResult = longArrayOf(2, 0, 2, 48_000, 7, 0, 0, 0)
+
+        delegate.selectChannel("0102030405060708")
+        val destination = ShortArray(8)
+        val read = async(start = CoroutineStart.UNDISPATCHED) {
+            delegate.readPcmFrames(destination, 4)
+        }
+        runCurrent()
+
+        assertThat(read.await().framesRead).isEqualTo(2)
+        assertThat(native.operations)
+            .containsExactly(
+                "select:0102030405060708",
+                "audio-status",
+                "read:4",
+                "audio-status"
+            )
+            .inOrder()
+        assertThat(delegate.pcmStatus.value.selectedChannelId).isEqualTo("0102030405060708")
+        assertThat(delegate.pcmStatus.value.generation).isEqualTo(1)
+        delegate.close()
+        runCurrent()
+    }
+
+    @Test
+    fun cancellationDoesNotReleaseDestinationBeforeNativeReadCompletes() = runTest {
+        val native = FakeNativeBridge()
+        val delegate = createDelegate(native)
+        runCurrent()
+        val destination = ShortArray(2)
+        val request = launch(start = CoroutineStart.UNDISPATCHED) {
+            delegate.readPcmFrames(destination, 1)
+        }
+
+        request.cancel()
+        assertThat(request.isCompleted).isFalse()
+        runCurrent()
+
+        assertThat(destination.asList())
+            .containsExactly(101.toShort(), 202.toShort())
+            .inOrder()
+        assertThat(request.isCompleted).isTrue()
+        delegate.close()
+        runCurrent()
+    }
+
+    @Test
+    fun closeDrainsQueuedReadWithoutTouchingNativeDestination() = runTest {
+        val native = FakeNativeBridge()
+        val delegate = createDelegate(native)
+        runCurrent()
+        native.operations.clear()
+        val destination = ShortArray(2)
+        val read = async(start = CoroutineStart.UNDISPATCHED) {
+            delegate.readPcmFrames(destination, 1)
+        }
+
+        delegate.close()
+        runCurrent()
+
+        assertThat(read.await()).isEqualTo(LinkAudioPcmRead(framesRead = 0, metadata = null))
+        assertThat(native.operations).doesNotContain("read:1")
+        assertThat(destination.asList()).containsExactly(0.toShort(), 0.toShort())
     }
 
     @Test
@@ -122,6 +198,68 @@ class LinkAudioDelegateTest {
 
         assertThat(native.operations.count { it == "status" }).isEqualTo(2)
         assertThat(native.operations.count { it == "channels" }).isEqualTo(2)
+        delegate.close()
+        runCurrent()
+    }
+
+    @Test
+    fun saturatedQueueCannotLoseClearOrDisable() = runTest {
+        val native = FakeNativeBridge()
+        val lock = FakeMulticastLock()
+        val delegate = createDelegate(native, lock)
+        runCurrent()
+        native.operations.clear()
+
+        repeat(16) { index -> delegate.selectChannel("channel-$index") }
+        delegate.selectChannel(null)
+        delegate.setEnabled(false)
+        runCurrent()
+
+        assertThat(native.operations).contains("select:null")
+        assertThat(native.operations).contains("enable:false")
+        assertThat(native.operations.none { it.startsWith("select:channel-") }).isTrue()
+        assertThat(lock.releaseCount).isEqualTo(1)
+        delegate.close()
+        runCurrent()
+    }
+
+    @Test
+    fun failedDisableReleasesLockAndRetriesBeforeMarkingGenerationApplied() = runTest {
+        val native = FakeNativeBridge().apply { disableFailuresRemaining = 1 }
+        val lock = FakeMulticastLock()
+        val delegate = createDelegate(native, lock)
+        runCurrent()
+        native.operations.clear()
+
+        delegate.setEnabled(false)
+        runCurrent()
+
+        val disableAttempts = native.operations.count { it == "enable:false" }
+        val releasesBeforeClose = lock.releaseCount
+        delegate.close()
+        runCurrent()
+
+        assertThat(disableAttempts).isEqualTo(2)
+        assertThat(releasesBeforeClose).isEqualTo(2)
+    }
+
+    @Test
+    fun sameChannelReselectionStaysPendingUntilLatestGenerationIsApplied() = runTest {
+        val native = FakeNativeBridge()
+        val delegate = createDelegate(native)
+        runCurrent()
+        native.operations.clear()
+
+        delegate.selectChannel("channel-a")
+        delegate.selectChannel("channel-b")
+        delegate.selectChannel("channel-a")
+        assertThat(delegate.pcmStatus.value).isEqualTo(LinkAudioPcmStatus())
+        runCurrent()
+
+        assertThat(native.operations.filter { it.startsWith("select:") })
+            .containsExactly("select:channel-a")
+        assertThat(delegate.pcmStatus.value.selectedChannelId).isEqualTo("channel-a")
+        assertThat(delegate.pcmStatus.value.generation).isEqualTo(3)
         delegate.close()
         runCurrent()
     }
@@ -143,6 +281,8 @@ private class FakeNativeBridge : NativeBridge {
     val operations = mutableListOf<String>()
     var status = longArrayOf(0, 0, 0)
     var failChannels = false
+    var disableFailuresRemaining = 0
+    var readResult: LongArray? = null
 
     override fun create(peerNameUtf8: ByteArray): Long {
         operations += "create"
@@ -155,6 +295,10 @@ private class FakeNativeBridge : NativeBridge {
 
     override fun setEnabled(handle: Long, enabled: Boolean) {
         operations += "enable:$enabled"
+        if (!enabled && disableFailuresRemaining > 0) {
+            disableFailuresRemaining--
+            error("disable failed")
+        }
     }
 
     override fun getStatus(handle: Long): LongArray {
@@ -166,6 +310,28 @@ private class FakeNativeBridge : NativeBridge {
         operations += "channels"
         if (failChannels) error("snapshot failed")
         return emptyArray()
+    }
+
+    override fun selectChannel(handle: Long, channelIdUtf8: ByteArray?) {
+        operations += "select:${channelIdUtf8?.decodeToString()}"
+    }
+
+    override fun readAudioFrames(
+        handle: Long,
+        destination: ShortArray,
+        requestedFrames: Int
+    ): LongArray? {
+        operations += "read:$requestedFrames"
+        if (destination.size >= 2) {
+            destination[0] = 101
+            destination[1] = 202
+        }
+        return readResult
+    }
+
+    override fun getAudioStatus(handle: Long): LongArray {
+        operations += "audio-status"
+        return longArrayOf(0, 0, 2, 0, 96_000, 0, 0, 0, 0, 0, 0, 0)
     }
 }
 

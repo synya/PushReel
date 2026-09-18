@@ -18,6 +18,7 @@ package com.google.jetpackcamera.feature.preview
 import android.content.Context
 import com.pushreel.linkaudio.LinkAudioChannel
 import com.pushreel.linkaudio.LinkAudioClient
+import com.pushreel.linkaudio.LinkAudioPcmStatus
 import com.pushreel.linkaudio.LinkAudioStatus
 import dagger.Binds
 import dagger.Module
@@ -39,6 +40,7 @@ data class LinkAudioUiState(
     val peerCount: Int = 0,
     val channels: List<LinkAudioChannel> = emptyList(),
     val selectedChannelId: String? = null,
+    val pcmStatus: LinkAudioPcmStatus = LinkAudioPcmStatus(),
     val error: String? = null
 )
 
@@ -51,10 +53,14 @@ interface LinkAudioController : Closeable {
     fun selectChannel(channelId: String)
 }
 
-class DefaultLinkAudioController @Inject constructor(
-    @ApplicationContext context: Context
+class DefaultLinkAudioController internal constructor(
+    private val client: LinkAudioClientFacade
 ) : LinkAudioController {
-    private val client = LinkAudioClient(context)
+    @Inject
+    constructor(@ApplicationContext context: Context) : this(
+        AndroidLinkAudioClient(LinkAudioClient(context))
+    )
+
     private val requestedEnabled = MutableStateFlow(false)
     private val selectedChannelId = MutableStateFlow<String?>(null)
     private val selectionError = MutableStateFlow<String?>(null)
@@ -62,21 +68,23 @@ class DefaultLinkAudioController @Inject constructor(
 
     override fun uiState(scope: CoroutineScope): StateFlow<LinkAudioUiState> = combine(
         client.status,
+        client.pcmStatus,
         requestedEnabled,
         selectedChannelId,
         selectionError
-    ) { status, requested, selected, selectionError ->
+    ) { status, pcmStatus, requested, selected, selectionError ->
         val selectedChannelDisappeared = requested &&
             status.linkAudioEnabled &&
             selected != null &&
             status.channels.none { it.id == selected }
-        if (selectedChannelDisappeared) {
-            selectedChannelId.compareAndSet(selected, null)
+        if (selectedChannelDisappeared && selectedChannelId.compareAndSet(selected, null)) {
+            client.selectChannel(null)
             this.selectionError.value = "Selected Link Audio channel is unavailable"
         }
         status.toUiState(
             requestedEnabled = requested,
             selectedChannelId = selected,
+            pcmStatus = pcmStatus,
             selectionError = selectionError
         )
     }.stateIn(
@@ -87,11 +95,15 @@ class DefaultLinkAudioController @Inject constructor(
 
     override fun onStart() {
         lifecycleStarted = true
-        if (requestedEnabled.value) client.setEnabled(true)
+        if (requestedEnabled.value) {
+            client.setEnabled(true)
+            selectedChannelId.value?.let(client::selectChannel)
+        }
     }
 
     override fun onStop() {
         lifecycleStarted = false
+        client.selectChannel(null)
         client.setEnabled(false)
     }
 
@@ -100,6 +112,7 @@ class DefaultLinkAudioController @Inject constructor(
         if (!enabled) {
             selectedChannelId.value = null
             selectionError.value = null
+            client.selectChannel(null)
         }
         client.setEnabled(enabled && lifecycleStarted)
     }
@@ -107,8 +120,29 @@ class DefaultLinkAudioController @Inject constructor(
     override fun selectChannel(channelId: String) {
         selectedChannelId.value = channelId
         selectionError.value = null
+        client.selectChannel(channelId)
     }
 
+    override fun close() {
+        client.selectChannel(null)
+        client.close()
+    }
+}
+
+internal interface LinkAudioClientFacade : Closeable {
+    val status: StateFlow<LinkAudioStatus>
+    val pcmStatus: StateFlow<LinkAudioPcmStatus>
+    fun setEnabled(enabled: Boolean)
+    fun selectChannel(channelId: String?)
+}
+
+private class AndroidLinkAudioClient(
+    private val client: LinkAudioClient
+) : LinkAudioClientFacade {
+    override val status: StateFlow<LinkAudioStatus> = client.status
+    override val pcmStatus: StateFlow<LinkAudioPcmStatus> = client.pcmStatus
+    override fun setEnabled(enabled: Boolean) = client.setEnabled(enabled)
+    override fun selectChannel(channelId: String?) = client.selectChannel(channelId)
     override fun close() = client.close()
 }
 
@@ -124,14 +158,22 @@ abstract class LinkAudioControllerModule {
 internal fun LinkAudioStatus.toUiState(
     requestedEnabled: Boolean,
     selectedChannelId: String?,
+    pcmStatus: LinkAudioPcmStatus = LinkAudioPcmStatus(),
     selectionError: String? = null
-): LinkAudioUiState = LinkAudioUiState(
-    requestedEnabled = requestedEnabled,
-    linkEnabled = linkEnabled && linkAudioEnabled,
-    peerCount = peerCount,
-    channels = channels,
-    selectedChannelId = selectedChannelId?.takeIf { selected ->
+): LinkAudioUiState {
+    val availableSelection = selectedChannelId?.takeIf { selected ->
         channels.any { it.id == selected }
-    },
-    error = error ?: selectionError
-)
+    }
+    val matchingPcmStatus = pcmStatus.takeIf {
+        availableSelection != null && it.selectedChannelId == availableSelection
+    } ?: LinkAudioPcmStatus()
+    return LinkAudioUiState(
+        requestedEnabled = requestedEnabled,
+        linkEnabled = linkEnabled && linkAudioEnabled,
+        peerCount = peerCount,
+        channels = channels,
+        selectedChannelId = availableSelection,
+        pcmStatus = matchingPcmStatus,
+        error = error ?: selectionError
+    )
+}
