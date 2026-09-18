@@ -7,7 +7,7 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 
 set(LINK_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../../../../third_party/ableton-link")
 
-add_library(pushreel_link_audio SHARED link_audio_jni.cpp pcm_fifo.hpp)
+add_library(pushreel_link_audio SHARED link_audio_jni.cpp pcm_fifo.hpp timing_mapping.hpp)
 
 target_include_directories(pushreel_link_audio SYSTEM PRIVATE
     "${LINK_ROOT}/include"

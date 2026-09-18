@@ -11,11 +11,13 @@
 #include <ableton/LinkAudio.hpp>
 
 #include "pcm_fifo.hpp"
+#include "timing_mapping.hpp"
 
 #include <algorithm>
 #include <array>
 #include <cstdint>
 #include <cstring>
+#include <cmath>
 #include <iomanip>
 #include <memory>
 #include <mutex>
@@ -24,8 +26,13 @@
 #include <string>
 #include <unordered_map>
 #include <vector>
+#include <time.h>
 
 namespace {
+
+constexpr double kRecordingQuantum = 4.0;
+constexpr std::int64_t kMaxClockBracketUs = 2'000;
+constexpr int kClockMappingAttempts = 3;
 
 struct LinkInstance {
   explicit LinkInstance(std::string peerName)
@@ -36,6 +43,10 @@ struct LinkInstance {
     std::lock_guard<std::mutex> lock(sourceMutex);
     source.reset();
     fifo = replacement;
+    {
+      std::lock_guard<std::mutex> timingLock(timingMutex);
+      timingAnchorCache.reset();
+    }
     if (channelId) {
       source = std::make_unique<ableton::LinkAudioSource>(
           link,
@@ -60,6 +71,8 @@ struct LinkInstance {
   void clearSource() {
     std::lock_guard<std::mutex> lock(sourceMutex);
     source.reset();
+    std::lock_guard<std::mutex> timingLock(timingMutex);
+    timingAnchorCache.reset();
   }
 
   bool hasSource() const {
@@ -76,7 +89,80 @@ struct LinkInstance {
   std::shared_ptr<pushreel::linkaudio::PcmFifo> fifo;
   mutable std::mutex sourceMutex;
   std::unique_ptr<ableton::LinkAudioSource> source;
+  std::mutex timingMutex;
+  pushreel::linkaudio::TimingAnchorCache timingAnchorCache;
 };
+
+std::optional<std::int64_t> elapsedRealtimeUsForRead(
+    LinkInstance& instance,
+    const pushreel::linkaudio::PcmFifo::ReadResult& read) {
+  if (read.frames == 0 || read.sampleRate == 0 || read.bufferFrames == 0
+      || read.bufferOffsetFrames > read.bufferFrames
+      || !std::isfinite(read.metadata.sessionBeatTime)
+      || !std::isfinite(read.metadata.tempo) || read.metadata.tempo <= 0.0) {
+    return std::nullopt;
+  }
+
+  auto info = ableton::LinkAudioSource::BufferHandle::Info{};
+  info.numChannels = pushreel::linkaudio::PcmFifo::kOutputChannels;
+  info.numFrames = read.bufferFrames;
+  info.sampleRate = read.sampleRate;
+  info.count = read.metadata.count;
+  info.sessionBeatTime = read.metadata.sessionBeatTime;
+  info.tempo = read.metadata.tempo;
+  std::copy(
+      read.metadata.sessionId.begin(), read.metadata.sessionId.end(), info.sessionId.begin());
+
+  // This runs on the JNI reader thread, never in the Link realtime callback.
+  const auto state = instance.link.captureAppSessionState();
+  const auto beginBeats = info.beginBeats(state, kRecordingQuantum);
+  if (!beginBeats || !std::isfinite(*beginBeats)) {
+    // beginBeats rejects buffers from a different Link session. This check intentionally runs
+    // before consulting the cache so an old-session anchor can never bypass validation.
+    return std::nullopt;
+  }
+
+  const auto identity = pushreel::linkaudio::BufferTimingIdentity{
+      read.metadata.count,
+      read.metadata.sessionId,
+      read.bufferFrames,
+      read.sampleRate};
+  std::int64_t bufferBeginElapsedRealtimeUs{};
+  {
+    std::lock_guard<std::mutex> lock(instance.timingMutex);
+    if (!instance.timingAnchorCache.get(identity, bufferBeginElapsedRealtimeUs)) {
+      const auto beginRawUs = state.timeAtBeat(*beginBeats, kRecordingQuantum).count();
+      const auto clock = instance.link.clock();
+      bool mapped = false;
+      for (auto attempt = 0; attempt < kClockMappingAttempts && !mapped; ++attempt) {
+        const auto rawBeforeUs = clock.micros().count();
+        ::timespec bootTime{};
+        if (::clock_gettime(CLOCK_BOOTTIME, &bootTime) != 0) return std::nullopt;
+        const auto rawAfterUs = clock.micros().count();
+        const auto bootUs = static_cast<std::int64_t>(bootTime.tv_sec) * 1'000'000
+                            + static_cast<std::int64_t>(bootTime.tv_nsec) / 1'000;
+        mapped = pushreel::linkaudio::mapRawToElapsedRealtimeUs(
+            beginRawUs,
+            rawBeforeUs,
+            bootUs,
+            rawAfterUs,
+            kMaxClockBracketUs,
+            bufferBeginElapsedRealtimeUs);
+      }
+      if (!mapped) return std::nullopt;
+      instance.timingAnchorCache.put(identity, bufferBeginElapsedRealtimeUs);
+    }
+  }
+
+  std::int64_t result{};
+  if (!pushreel::linkaudio::addFrameOffsetUs(
+      bufferBeginElapsedRealtimeUs,
+      read.bufferOffsetFrames,
+      read.bufferFrames,
+      read.sampleRate,
+      result)) return std::nullopt;
+  return result;
+}
 
 std::mutex gRegistryMutex;
 std::unordered_map<std::int64_t, std::shared_ptr<LinkInstance>> gInstances;
@@ -286,7 +372,9 @@ Java_com_pushreel_linkaudio_JniNativeBridge_nativeReadAudioFrames(
     const auto read =
         instance->fifoSnapshot()->read(output, static_cast<std::uint32_t>(frames));
     env->ReleaseShortArrayElements(destination, output, 0);
-    const std::array<jlong, 8> values{
+    const auto elapsedRealtimeUs = elapsedRealtimeUsForRead(*instance, read);
+    // Keep the original eight fields stable and append local timing fields.
+    const std::array<jlong, 10> values{
         unsignedToJavaLong(read.frames),
         unsignedToJavaLong(read.bufferOffsetFrames),
         unsignedToJavaLong(read.bufferFrames),
@@ -294,7 +382,9 @@ Java_com_pushreel_linkaudio_JniNativeBridge_nativeReadAudioFrames(
         static_cast<jlong>(read.metadata.count),
         doubleBits(read.metadata.sessionBeatTime),
         doubleBits(read.metadata.tempo),
-        packId(read.metadata.sessionId)};
+        packId(read.metadata.sessionId),
+        elapsedRealtimeUs ? 1 : 0,
+        elapsedRealtimeUs.value_or(0)};
     const auto result = env->NewLongArray(static_cast<jsize>(values.size()));
     if (result != nullptr) {
       env->SetLongArrayRegion(result, 0, static_cast<jsize>(values.size()), values.data());

@@ -80,7 +80,9 @@ class LinkAudioModelsTest {
                 99,
                 12.5.toBits(),
                 123.0.toBits(),
-                0x0102030405060708
+                0x0102030405060708,
+                1,
+                9_876_543
             )
         )
 
@@ -92,5 +94,17 @@ class LinkAudioModelsTest {
         assertThat(read.metadata?.sampleRate).isEqualTo(48_000)
         assertThat(read.metadata?.bufferFrames).isEqualTo(512)
         assertThat(read.metadata?.offsetFrames).isEqualTo(256)
+        assertThat(read.metadata?.timingValid).isTrue()
+        assertThat(read.metadata?.firstFrameElapsedRealtimeUs).isEqualTo(9_876_543)
+    }
+
+    @Test
+    fun decodePcmRead_acceptsLegacyResultWithoutMappedTiming() {
+        val read = decodePcmRead(
+            longArrayOf(1, 0, 1, 48_000, 1, 0.0.toBits(), 120.0.toBits(), 1)
+        )
+
+        assertThat(read.metadata?.timingValid).isFalse()
+        assertThat(read.metadata?.firstFrameElapsedRealtimeUs).isNull()
     }
 }

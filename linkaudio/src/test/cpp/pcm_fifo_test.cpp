@@ -4,6 +4,7 @@
  * Licensed under the GNU General Public License version 2 or later.
  */
 #include "../../main/cpp/pcm_fifo.hpp"
+#include "../../main/cpp/timing_mapping.hpp"
 
 #include <array>
 #include <cassert>
@@ -125,6 +126,42 @@ void testUnsignedPositionWrap() {
   assert(fifo.status().bufferedFrames == 0);
 }
 
+void testTimingMappingUsesSampleRateAndStableCachedAnchor() {
+  std::int64_t anchor{};
+  assert(pushreel::linkaudio::mapRawToElapsedRealtimeUs(
+      1'000'000, 2'000'000, 3'000'100, 2'000'200, 2'000, anchor));
+  assert(anchor == 2'000'000);
+
+  const pushreel::linkaudio::BufferTimingIdentity identity{
+      7, {1, 2, 3, 4, 5, 6, 7, 8}, 480, 48'000};
+  pushreel::linkaudio::TimingAnchorCache cache;
+  cache.put(identity, anchor);
+  std::int64_t cachedAnchor{};
+  assert(cache.get(identity, cachedAnchor));
+  assert(cachedAnchor == anchor);
+
+  std::int64_t firstPartial{};
+  std::int64_t secondPartial{};
+  assert(pushreel::linkaudio::addFrameOffsetUs(anchor, 120, 480, 48'000, firstPartial));
+  assert(pushreel::linkaudio::addFrameOffsetUs(
+      cachedAnchor, 240, 480, 48'000, secondPartial));
+  assert(firstPartial == anchor + 2'500);
+  assert(secondPartial == anchor + 5'000);
+
+  // Tempo and a beat-derived buffer end are deliberately absent: PCM duration follows the
+  // source sample rate because PushReel does not resample.
+  assert(!pushreel::linkaudio::mapRawToElapsedRealtimeUs(
+      1'000'000, 2'000'000, 3'000'000, 2'003'000, 2'000, anchor));
+  assert(!pushreel::linkaudio::addFrameOffsetUs(anchor, 481, 480, 48'000, firstPartial));
+  assert(!pushreel::linkaudio::addFrameOffsetUs(anchor, 0, 480, 0, firstPartial));
+
+  const auto changedIdentity = pushreel::linkaudio::BufferTimingIdentity{
+      7, {1, 2, 3, 4, 5, 6, 7, 8}, 480, 44'100};
+  assert(!cache.get(changedIdentity, cachedAnchor));
+  cache.reset();
+  assert(!cache.get(identity, cachedAnchor));
+}
+
 }  // namespace
 
 int main() {
@@ -133,4 +170,5 @@ int main() {
   testOverflowDropsWholeNewestBuffer();
   testSampleRateChangeAndPhysicalWrap();
   testUnsignedPositionWrap();
+  testTimingMappingUsesSampleRateAndStableCachedAnchor();
 }

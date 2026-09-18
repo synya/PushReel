@@ -25,8 +25,20 @@ pluginManagement {
 dependencyResolutionManagement {
     repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
     repositories {
-        maven {
-            setUrl("https://androidx.dev/snapshots/latest/artifacts/repository")
+        exclusiveContent {
+            forRepository {
+                maven {
+                    // Keep the CameraX snapshot atomic group reproducible. The moving
+                    // `latest` repository can publish metadata before every referenced
+                    // AAR is available.
+                    setUrl(
+                        "https://androidx.dev/snapshots/builds/16383227/artifacts/repository"
+                    )
+                }
+            }
+            filter {
+                includeGroupByRegex("androidx\\.camera(\\..*)?")
+            }
         }
         google()
         mavenCentral()

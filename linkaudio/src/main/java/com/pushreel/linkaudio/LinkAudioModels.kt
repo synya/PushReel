@@ -60,7 +60,9 @@ data class LinkAudioBufferMetadata(
     val sessionId: String,
     val sampleRate: Int,
     val bufferFrames: Int,
-    val offsetFrames: Int
+    val offsetFrames: Int,
+    val timingValid: Boolean = false,
+    val firstFrameElapsedRealtimeUs: Long? = null
 )
 
 /** One read that never crosses an original Link Audio buffer boundary. */
@@ -111,7 +113,7 @@ private const val PCM_STATUS_FIELD_COUNT = 12
 
 internal fun decodePcmRead(values: LongArray?): LinkAudioPcmRead {
     if (values == null) return LinkAudioPcmRead(framesRead = 0, metadata = null)
-    require(values.size == PCM_READ_FIELD_COUNT) {
+    require(values.size == LEGACY_PCM_READ_FIELD_COUNT || values.size == PCM_READ_FIELD_COUNT) {
         "Native PCM read contains ${values.size} fields"
     }
     val frames = values[0].coerceIn(0, Int.MAX_VALUE.toLong()).toInt()
@@ -125,9 +127,18 @@ internal fun decodePcmRead(values: LongArray?): LinkAudioPcmRead {
             sessionId = java.lang.Long.toUnsignedString(values[7], 16).padStart(16, '0'),
             sampleRate = values[3].coerceIn(0, Int.MAX_VALUE.toLong()).toInt(),
             bufferFrames = values[2].coerceIn(0, Int.MAX_VALUE.toLong()).toInt(),
-            offsetFrames = values[1].coerceIn(0, Int.MAX_VALUE.toLong()).toInt()
+            offsetFrames = values[1].coerceIn(0, Int.MAX_VALUE.toLong()).toInt(),
+            timingValid = values.size == PCM_READ_FIELD_COUNT && values[8] != 0L,
+            firstFrameElapsedRealtimeUs = if (
+                values.size == PCM_READ_FIELD_COUNT && values[8] != 0L
+            ) {
+                values[9]
+            } else {
+                null
+            }
         )
     )
 }
 
-private const val PCM_READ_FIELD_COUNT = 8
+private const val LEGACY_PCM_READ_FIELD_COUNT = 8
+private const val PCM_READ_FIELD_COUNT = 10

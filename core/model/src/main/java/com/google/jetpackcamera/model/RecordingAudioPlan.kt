@@ -70,6 +70,9 @@ sealed interface RecordingPcmReadResult {
 
     data class SourceInvalidated(val reason: String) : RecordingPcmReadResult
 
+    /** PCM was received, but it cannot be placed on the recording timeline safely. */
+    data class InvalidTiming(val reason: String) : RecordingPcmReadResult
+
     data class Error(val cause: Throwable) : RecordingPcmReadResult
 }
 
@@ -80,5 +83,6 @@ data class RecordingPcmBufferMetadata(
     val sessionId: String,
     val sampleRate: Int,
     val bufferFrames: Int,
-    val offsetFrames: Int
+    val offsetFrames: Int,
+    val firstFrameElapsedRealtimeUs: Long
 )

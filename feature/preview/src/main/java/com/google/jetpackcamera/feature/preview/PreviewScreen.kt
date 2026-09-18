@@ -1176,55 +1176,6 @@ private fun SelectedLinkAudioSource(
     }
 }
 
-internal enum class LinkAudioVisualState {
-    Off,
-    Starting,
-    Available,
-    Waiting,
-    Ready,
-    Warning,
-    Error
-}
-
-internal fun LinkAudioUiState.visualState(): LinkAudioVisualState = when {
-    error != null -> LinkAudioVisualState.Error
-    !requestedEnabled -> LinkAudioVisualState.Off
-    !linkEnabled -> LinkAudioVisualState.Starting
-    selectedChannelId == null && channels.isNotEmpty() -> LinkAudioVisualState.Available
-    selectedChannelId == null -> LinkAudioVisualState.Waiting
-    pcmStatus.selectedChannelId != selectedChannelId -> LinkAudioVisualState.Waiting
-    !pcmStatus.channelSelected || pcmStatus.sampleRate <= 0 -> LinkAudioVisualState.Waiting
-    pcmStatus.hasWarning() -> LinkAudioVisualState.Warning
-    else -> LinkAudioVisualState.Ready
-}
-
-internal fun LinkAudioVisualState.contentDescription(uiState: LinkAudioUiState): String {
-    val selectedChannel = uiState.channels.firstOrNull { it.id == uiState.selectedChannelId }
-    val source = selectedChannel?.let { "${it.peerName}, ${it.name}" }
-    val format = uiState.pcmStatus.takeIf {
-        it.selectedChannelId == uiState.selectedChannelId && it.sampleRate > 0
-    }?.formatDescription()
-
-    return when (this) {
-        LinkAudioVisualState.Off -> "Link Audio off"
-        LinkAudioVisualState.Starting -> "Link Audio starting"
-        LinkAudioVisualState.Available -> "Link Audio sources available"
-        LinkAudioVisualState.Waiting -> source?.let { "Link Audio waiting for audio from $it" }
-            ?: "Link Audio waiting for a source"
-        LinkAudioVisualState.Ready -> listOfNotNull(
-            "Link Audio ready",
-            source,
-            format
-        ).joinToString(", ")
-        LinkAudioVisualState.Warning -> listOfNotNull(
-            "Link Audio buffer warning",
-            source,
-            format
-        ).joinToString(", ")
-        LinkAudioVisualState.Error -> "Link Audio error"
-    }
-}
-
 @Composable
 private fun LinkAudioVisualState.color(): Color = when (this) {
     LinkAudioVisualState.Off -> MaterialTheme.colorScheme.onSurfaceVariant
@@ -1248,40 +1199,6 @@ private fun LinkAudioVisualState.menuSummary(uiState: LinkAudioUiState): String 
     LinkAudioVisualState.Ready -> "Ready"
     LinkAudioVisualState.Warning -> "Audio buffer needs attention"
     LinkAudioVisualState.Error -> "Error"
-}
-
-internal fun com.pushreel.linkaudio.LinkAudioPcmStatus.fillFraction(): Float =
-    if (capacityFrames > 0) {
-        (bufferedFrames.toFloat() / capacityFrames).coerceIn(0f, 1f)
-    } else {
-        0f
-    }
-
-internal fun com.pushreel.linkaudio.LinkAudioPcmStatus.hasWarning(): Boolean =
-    droppedFrames > 0 || overflowCount > 0 || underrunCount > 0 || invalidBufferCount > 0
-
-internal fun com.pushreel.linkaudio.LinkAudioPcmStatus.nonZeroDiagnostics(): List<String> =
-    buildList {
-        if (droppedFrames > 0) add("Dropped $droppedFrames")
-        if (overflowCount > 0) add("Overflows $overflowCount")
-        if (underrunCount > 0) add("Underruns $underrunCount")
-        if (invalidBufferCount > 0) add("Invalid $invalidBufferCount")
-    }
-
-private fun com.pushreel.linkaudio.LinkAudioPcmStatus.formatDescription(): String {
-    if (sampleRate <= 0) return "Waiting for stream format"
-    val sampleRateKhz = sampleRate / 1_000f
-    val rate = if (sampleRate % 1_000 == 0) {
-        "${sampleRate / 1_000} kHz"
-    } else {
-        "$sampleRateKhz kHz"
-    }
-    val channels = when (channelCount) {
-        1 -> "Mono"
-        2 -> "Stereo"
-        else -> "$channelCount channels"
-    }
-    return "$rate · $channels"
 }
 
 @Preview

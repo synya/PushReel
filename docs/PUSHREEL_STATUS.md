@@ -26,8 +26,12 @@ The recording request now captures an immutable audio-source plan at the instant
 record button is pressed and carries it through the camera command path into the
 camera session. A ready Link plan contains the selected peer/channel, source format,
 selection generation, and a coarse single-consumer PCM reader. The reader distinguishes
-data, a temporary underrun, source invalidation, and a read failure. Until the external
-AAC/backend path is implemented, any recording request made with Link enabled is
+data, a temporary underrun, source invalidation, invalid timing, and a read failure.
+Each valid read now carries the first PCM frame's timestamp in Android's monotonic
+`elapsedRealtime` timebase. Native code derives one anchor from the exact Link buffer
+descriptor, converts `CLOCK_MONOTONIC_RAW` to `CLOCK_BOOTTIME` with a bounded clock
+sampling bracket, and advances partial reads by frame offset and sample rate. Until the
+external AAC/backend path is implemented, any recording request made with Link enabled is
 rejected with a visible capture error before CameraX starts. This prevents both a ready
 and a temporarily unavailable Link source from silently falling back to the phone
 microphone.
@@ -39,11 +43,10 @@ preserved.
 
 ## Next implementation slice
 
-Verify live PCM reception and FIFO diagnostics from the published Ableton channel on
-the physical phone. Then consume the captured recording audio plan in a custom recording
-backend, put video encoding under application control, and add AAC encoding from the
-buffered Link Audio PCM. The preserved Link buffer metadata must feed an explicit
-Link-to-Android monotonic time mapping before PCM is written to the encoder or muxer.
+Verify live PCM reception, FIFO diagnostics, and valid monotonic timestamps from the
+published Ableton channel on the physical phone. Then consume the captured recording
+audio plan in a custom recording backend, put video encoding under application control,
+and add AAC encoding from the buffered Link Audio PCM.
 
 AAC encoding, a shared audio/video timebase, custom recording coordination, and MP4
 muxing remain future work. The existing CameraX Recorder is not an external PCM input
@@ -73,7 +76,9 @@ Verified through 2026-09-18:
   recording before `CameraSystem` is called, while the default camera source still starts
   the inherited recording path.
 - The host PCM FIFO test covers descriptor boundaries, overflow/underrun counters,
-  sample-rate changes, timing metadata, and unsigned ring-position wraparound.
+  sample-rate changes, timing metadata, monotonic clock mapping, partial-read timestamp
+  offsets, anchor-cache reuse/reset, bracket rejection, and unsigned ring-position
+  wraparound.
 - Link Audio unit tests cover ordered selection/read operations, cancellation-safe
   buffer ownership, a saturated command queue, repeated selection of the same channel,
   and retry/release behavior after a failed native disable.

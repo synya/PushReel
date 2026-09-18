@@ -224,7 +224,13 @@ private fun LinkAudioClientFacade.matchesSelection(channelId: String, generation
 
 private fun LinkAudioPcmRead.toRecordingPcmRead(): RecordingPcmReadResult {
     val metadata = metadata
-    return if (framesRead > 0 && metadata != null) {
+    if (framesRead <= 0 || metadata == null) return RecordingPcmReadResult.Underrun
+    val firstFrameElapsedRealtimeUs = metadata.firstFrameElapsedRealtimeUs
+    return if (!metadata.timingValid || firstFrameElapsedRealtimeUs == null) {
+        RecordingPcmReadResult.InvalidTiming(
+            "Link Audio PCM buffer has no valid monotonic timestamp"
+        )
+    } else {
         RecordingPcmReadResult.Data(
             framesRead = framesRead,
             metadata =
@@ -235,11 +241,10 @@ private fun LinkAudioPcmRead.toRecordingPcmRead(): RecordingPcmReadResult {
                 sessionId = metadata.sessionId,
                 sampleRate = metadata.sampleRate,
                 bufferFrames = metadata.bufferFrames,
-                offsetFrames = metadata.offsetFrames
+                offsetFrames = metadata.offsetFrames,
+                firstFrameElapsedRealtimeUs = firstFrameElapsedRealtimeUs
             )
         )
-    } else {
-        RecordingPcmReadResult.Underrun
     }
 }
 

@@ -233,7 +233,9 @@ class LinkAudioUiStateTest {
                 sessionId = "0102030405060708",
                 sampleRate = 48_000,
                 bufferFrames = 128,
-                offsetFrames = 4
+                offsetFrames = 4,
+                timingValid = true,
+                firstFrameElapsedRealtimeUs = 9_876_543
             )
         )
 
@@ -249,6 +251,50 @@ class LinkAudioUiStateTest {
         read as RecordingPcmReadResult.Data
         assertThat(read.framesRead).isEqualTo(2)
         assertThat(read.metadata.bufferCount).isEqualTo(9)
+        assertThat(read.metadata.firstFrameElapsedRealtimeUs).isEqualTo(9_876_543)
+    }
+
+    @Test
+    fun recordingReaderRejectsPcmWithoutValidTiming() = runTest {
+        val client = FakeLinkAudioClient()
+        val controller = DefaultLinkAudioController(client)
+        controller.setEnabled(true)
+        controller.selectChannel(channel.id)
+        client.status.value = LinkAudioStatus(
+            linkEnabled = true,
+            linkAudioEnabled = true,
+            channels = listOf(channel)
+        )
+        client.pcmStatus.value = LinkAudioPcmStatus(
+            selectedChannelId = channel.id,
+            generation = 8,
+            channelSelected = true,
+            sampleRate = 48_000,
+            channelCount = 2
+        )
+        client.nextRead = LinkAudioPcmRead(
+            framesRead = 2,
+            metadata = LinkAudioBufferMetadata(
+                bufferCount = 10,
+                sessionBeatTime = 13.0,
+                tempo = 120.0,
+                sessionId = "0102030405060708",
+                sampleRate = 48_000,
+                bufferFrames = 128,
+                offsetFrames = 0,
+                timingValid = false,
+                firstFrameElapsedRealtimeUs = null
+            )
+        )
+        val source = controller.recordingAudioPlan().source as RecordingAudioSource.LinkAudioReady
+
+        assertThat(source.reader.read(ShortArray(4), 2))
+            .isInstanceOf(RecordingPcmReadResult.InvalidTiming::class.java)
+        client.nextRead = client.nextRead.copy(
+            metadata = client.nextRead.metadata?.copy(timingValid = true)
+        )
+        assertThat(source.reader.read(ShortArray(4), 2))
+            .isInstanceOf(RecordingPcmReadResult.InvalidTiming::class.java)
     }
 
     @Test
