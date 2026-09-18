@@ -248,6 +248,7 @@ class PreviewViewModel @Inject constructor(
                 )
             }
         },
+        recordingAudioPlanProvider = linkAudioController::recordingAudioPlan,
         coroutineContext = viewModelScope.coroutineContext
     )
 

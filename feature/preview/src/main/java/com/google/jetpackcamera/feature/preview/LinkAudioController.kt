@@ -16,8 +16,15 @@
 package com.google.jetpackcamera.feature.preview
 
 import android.content.Context
+import com.google.jetpackcamera.model.LinkAudioUnavailableReason
+import com.google.jetpackcamera.model.RecordingAudioPlan
+import com.google.jetpackcamera.model.RecordingAudioSource
+import com.google.jetpackcamera.model.RecordingPcmBufferMetadata
+import com.google.jetpackcamera.model.RecordingPcmReadResult
+import com.google.jetpackcamera.model.RecordingPcmReader
 import com.pushreel.linkaudio.LinkAudioChannel
 import com.pushreel.linkaudio.LinkAudioClient
+import com.pushreel.linkaudio.LinkAudioPcmRead
 import com.pushreel.linkaudio.LinkAudioPcmStatus
 import com.pushreel.linkaudio.LinkAudioStatus
 import dagger.Binds
@@ -27,6 +34,7 @@ import dagger.hilt.android.qualifiers.ApplicationContext
 import dagger.hilt.components.SingletonComponent
 import java.io.Closeable
 import javax.inject.Inject
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -51,6 +59,7 @@ interface LinkAudioController : Closeable {
     fun onStop()
     fun setEnabled(enabled: Boolean)
     fun selectChannel(channelId: String)
+    fun recordingAudioPlan(): RecordingAudioPlan = RecordingAudioPlan()
 }
 
 class DefaultLinkAudioController internal constructor(
@@ -123,6 +132,65 @@ class DefaultLinkAudioController internal constructor(
         client.selectChannel(channelId)
     }
 
+    override fun recordingAudioPlan(): RecordingAudioPlan {
+        if (!requestedEnabled.value) return RecordingAudioPlan()
+        val status = client.status.value
+        val pcmStatus = client.pcmStatus.value
+        val channelId = selectedChannelId.value
+        val channel = status.channels.firstOrNull { it.id == channelId }
+        val unavailableReason = when {
+            !status.linkEnabled || !status.linkAudioEnabled -> LinkAudioUnavailableReason.STARTING
+            channelId == null -> LinkAudioUnavailableReason.NO_CHANNEL_SELECTED
+            channel == null -> LinkAudioUnavailableReason.SELECTED_CHANNEL_UNAVAILABLE
+            !pcmStatus.channelSelected ||
+                pcmStatus.selectedChannelId != channel.id ||
+                pcmStatus.generation <= 0 ||
+                pcmStatus.sampleRate <= 0 -> LinkAudioUnavailableReason.PCM_NOT_READY
+            pcmStatus.channelCount != LINK_AUDIO_CHANNEL_COUNT ->
+                LinkAudioUnavailableReason.UNSUPPORTED_FORMAT
+            else -> null
+        }
+        if (unavailableReason != null) {
+            return RecordingAudioPlan(RecordingAudioSource.LinkAudioUnavailable(unavailableReason))
+        }
+        checkNotNull(channel)
+        val generation = pcmStatus.generation
+        val reader = RecordingPcmReader { destination, maxFrames ->
+            if (!client.matchesSelection(channel.id, generation)) {
+                RecordingPcmReadResult.SourceInvalidated(
+                    "Link Audio channel selection changed"
+                )
+            } else {
+                try {
+                    val read = client.readPcmFrames(destination, maxFrames).toRecordingPcmRead()
+                    if (client.matchesSelection(channel.id, generation)) {
+                        read
+                    } else {
+                        RecordingPcmReadResult.SourceInvalidated(
+                            "Link Audio channel selection changed during read"
+                        )
+                    }
+                } catch (error: CancellationException) {
+                    throw error
+                } catch (error: Exception) {
+                    RecordingPcmReadResult.Error(error)
+                }
+            }
+        }
+        return RecordingAudioPlan(
+            RecordingAudioSource.LinkAudioReady(
+                channelId = channel.id,
+                channelName = channel.name,
+                peerId = channel.peerId,
+                peerName = channel.peerName,
+                sampleRate = pcmStatus.sampleRate,
+                channelCount = pcmStatus.channelCount,
+                selectionGeneration = generation,
+                reader = reader
+            )
+        )
+    }
+
     override fun close() {
         client.selectChannel(null)
         client.close()
@@ -134,6 +202,7 @@ internal interface LinkAudioClientFacade : Closeable {
     val pcmStatus: StateFlow<LinkAudioPcmStatus>
     fun setEnabled(enabled: Boolean)
     fun selectChannel(channelId: String?)
+    suspend fun readPcmFrames(destination: ShortArray, maxFrames: Int): LinkAudioPcmRead
 }
 
 private class AndroidLinkAudioClient(
@@ -143,8 +212,38 @@ private class AndroidLinkAudioClient(
     override val pcmStatus: StateFlow<LinkAudioPcmStatus> = client.pcmStatus
     override fun setEnabled(enabled: Boolean) = client.setEnabled(enabled)
     override fun selectChannel(channelId: String?) = client.selectChannel(channelId)
+    override suspend fun readPcmFrames(destination: ShortArray, maxFrames: Int): LinkAudioPcmRead =
+        client.readPcmFrames(destination, maxFrames)
     override fun close() = client.close()
 }
+
+private fun LinkAudioClientFacade.matchesSelection(channelId: String, generation: Long): Boolean =
+    pcmStatus.value.let {
+        it.channelSelected && it.selectedChannelId == channelId && it.generation == generation
+    }
+
+private fun LinkAudioPcmRead.toRecordingPcmRead(): RecordingPcmReadResult {
+    val metadata = metadata
+    return if (framesRead > 0 && metadata != null) {
+        RecordingPcmReadResult.Data(
+            framesRead = framesRead,
+            metadata =
+            RecordingPcmBufferMetadata(
+                bufferCount = metadata.bufferCount,
+                sessionBeatTime = metadata.sessionBeatTime,
+                tempo = metadata.tempo,
+                sessionId = metadata.sessionId,
+                sampleRate = metadata.sampleRate,
+                bufferFrames = metadata.bufferFrames,
+                offsetFrames = metadata.offsetFrames
+            )
+        )
+    } else {
+        RecordingPcmReadResult.Underrun
+    }
+}
+
+private const val LINK_AUDIO_CHANNEL_COUNT = 2
 
 @Module
 @InstallIn(SingletonComponent::class)

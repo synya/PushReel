@@ -25,6 +25,8 @@ import com.google.jetpackcamera.model.CaptureEvent
 import com.google.jetpackcamera.model.ExternalCaptureMode
 import com.google.jetpackcamera.model.ImageCaptureEvent
 import com.google.jetpackcamera.model.IntProgress
+import com.google.jetpackcamera.model.RecordingAudioPlan
+import com.google.jetpackcamera.model.RecordingAudioSource
 import com.google.jetpackcamera.model.SaveLocation
 import com.google.jetpackcamera.model.SaveMode
 import com.google.jetpackcamera.model.VideoCaptureEvent
@@ -71,6 +73,7 @@ class CaptureControllerImpl(
     private val imageWellController: ImageWellController? = null,
     private val onImageCached: ((Uri) -> Unit)? = null,
     private val onVideoCached: ((Uri) -> Unit)? = null,
+    private val recordingAudioPlanProvider: () -> RecordingAudioPlan = { RecordingAudioPlan() },
     coroutineContext: CoroutineContext
 ) : CaptureController {
 
@@ -140,6 +143,22 @@ class CaptureControllerImpl(
             return
         }
         Log.d(TAG, "startVideoRecording")
+        val audioPlan = recordingAudioPlanProvider()
+        val linkAudioError = when (val source = audioPlan.source) {
+            RecordingAudioSource.CameraDefault -> null
+            is RecordingAudioSource.LinkAudioUnavailable ->
+                "Link Audio is not ready: ${source.reason.name}"
+            is RecordingAudioSource.LinkAudioReady ->
+                "external Link recording backend not available"
+        }
+        if (linkAudioError != null) {
+            captureEvents.trySend(
+                VideoCaptureEvent.VideoCaptureError(
+                    LinkAudioRecordingUnavailableException(linkAudioError)
+                )
+            )
+            return
+        }
         recordingJob = scope.launch {
             val (saveLocation, _) = nextSaveLocation(
                 saveMode,
@@ -147,7 +166,7 @@ class CaptureControllerImpl(
                 externalCapturesCallback
             )
             try {
-                cameraSystemProvider().startVideoRecording(saveLocation) {
+                cameraSystemProvider().startVideoRecording(saveLocation, audioPlan) {
                     when (it) {
                         is OnVideoRecordEvent.OnVideoRecorded -> {
                             Log.d(TAG, "cameraSystem.startRecording OnVideoRecorded")
@@ -243,3 +262,6 @@ class CaptureControllerImpl(
         return scope.coroutineContext.job
     }
 }
+
+private class LinkAudioRecordingUnavailableException(message: String) :
+    IllegalStateException(message)

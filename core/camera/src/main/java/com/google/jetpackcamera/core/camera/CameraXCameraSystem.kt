@@ -63,6 +63,7 @@ import com.google.jetpackcamera.model.LensToZoom
 import com.google.jetpackcamera.model.LowLightBoostAvailability
 import com.google.jetpackcamera.model.LowLightBoostPriority
 import com.google.jetpackcamera.model.LowLightBoostState
+import com.google.jetpackcamera.model.RecordingAudioPlan
 import com.google.jetpackcamera.model.SaveLocation
 import com.google.jetpackcamera.model.StabilizationMode
 import com.google.jetpackcamera.model.TARGET_FPS_15
@@ -644,6 +645,7 @@ class CameraXCameraSystem(
 
     override suspend fun startVideoRecording(
         saveLocation: SaveLocation,
+        audioPlan: RecordingAudioPlan,
         onVideoRecord: (OnVideoRecordEvent) -> Unit
     ) {
         videoCaptureControlEvents.send(
@@ -651,6 +653,7 @@ class CameraXCameraSystem(
                 saveLocation,
                 currentSettings.value?.maxVideoDurationMillis
                     ?: UNLIMITED_VIDEO_DURATION,
+                audioPlan = audioPlan,
                 onVideoRecord = onVideoRecord
             )
         )

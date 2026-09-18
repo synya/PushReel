@@ -33,6 +33,7 @@ import com.google.jetpackcamera.model.FlashMode
 import com.google.jetpackcamera.model.ImageOutputFormat
 import com.google.jetpackcamera.model.LensFacing
 import com.google.jetpackcamera.model.LowLightBoostPriority
+import com.google.jetpackcamera.model.RecordingAudioPlan
 import com.google.jetpackcamera.model.SaveLocation
 import com.google.jetpackcamera.model.StabilizationMode
 import com.google.jetpackcamera.model.TestPattern
@@ -133,14 +134,18 @@ class FakeCameraSystem(defaultCameraSettings: CameraAppSettings = CameraAppSetti
 
     override suspend fun startVideoRecording(
         saveLocation: SaveLocation,
+        audioPlan: RecordingAudioPlan,
         onVideoRecord: (OnVideoRecordEvent) -> Unit
     ) {
         if (!useCasesBinded) {
             throw IllegalStateException("Usecases not bound")
         }
         numVideoRecordingStarts++
+        lastRecordingAudioPlan = audioPlan
         recordingInProgress = true
     }
+
+    var lastRecordingAudioPlan: RecordingAudioPlan = RecordingAudioPlan()
 
     override suspend fun pauseVideoRecording() {
         isRecordingPaused = true

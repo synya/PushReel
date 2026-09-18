@@ -29,6 +29,10 @@ import com.google.jetpackcamera.model.CaptureEvent
 import com.google.jetpackcamera.model.ExternalCaptureMode
 import com.google.jetpackcamera.model.ImageCaptureEvent
 import com.google.jetpackcamera.model.IntProgress
+import com.google.jetpackcamera.model.LinkAudioUnavailableReason
+import com.google.jetpackcamera.model.RecordingAudioPlan
+import com.google.jetpackcamera.model.RecordingAudioSource
+import com.google.jetpackcamera.model.RecordingPcmReadResult
 import com.google.jetpackcamera.model.SaveLocation
 import com.google.jetpackcamera.model.SaveMode
 import com.google.jetpackcamera.model.VideoCaptureEvent
@@ -86,7 +90,8 @@ class CaptureControllerImplTest {
         },
         imageWellController: ImageWellController? = fakeImageWellController,
         onImageCached: ((Uri) -> Unit)? = null,
-        onVideoCached: ((Uri) -> Unit)? = null
+        onVideoCached: ((Uri) -> Unit)? = null,
+        recordingAudioPlanProvider: () -> RecordingAudioPlan = { RecordingAudioPlan() }
     ): CaptureControllerImpl {
         return CaptureControllerImpl(
             trackedCaptureUiState = trackedCaptureUiState,
@@ -98,6 +103,7 @@ class CaptureControllerImplTest {
             imageWellController = imageWellController,
             onImageCached = onImageCached,
             onVideoCached = onVideoCached,
+            recordingAudioPlanProvider = recordingAudioPlanProvider,
             coroutineContext = testScope.coroutineContext
         )
     }
@@ -290,6 +296,64 @@ class CaptureControllerImplTest {
     }
 
     @Test
+    fun startVideoRecordingRejectsReadyLinkBeforeCameraCall() = runCameraTest {
+        val linkPlan = RecordingAudioPlan(
+            RecordingAudioSource.LinkAudioReady(
+                channelId = "main",
+                channelName = "Main",
+                peerId = "push-3",
+                peerName = "Push 3",
+                sampleRate = 48_000,
+                channelCount = 2,
+                selectionGeneration = 12,
+                reader = { _, _ -> RecordingPcmReadResult.Underrun }
+            )
+        )
+        val controller = createCaptureController(recordingAudioPlanProvider = { linkPlan })
+
+        controller.startVideoRecording()
+        advanceUntilIdle()
+
+        assertThat(fakeCameraSystem.numVideoRecordingStarts).isEqualTo(0)
+        val event = captureEvents.receive() as VideoCaptureEvent.VideoCaptureError
+        assertThat(event.error).hasMessageThat().contains(
+            "external Link recording backend not available"
+        )
+    }
+
+    @Test
+    fun startVideoRecordingDefaultsToCameraAudioPlan() = runCameraTest {
+        val controller = createCaptureController()
+
+        controller.startVideoRecording()
+        advanceUntilIdle()
+
+        assertThat(fakeCameraSystem.numVideoRecordingStarts).isEqualTo(1)
+        assertThat(testCameraSystem.lastRecordingAudioPlan.source)
+            .isEqualTo(RecordingAudioSource.CameraDefault)
+    }
+
+    @Test
+    fun startVideoRecordingRejectsUnavailableLinkBeforeCameraCall() = runCameraTest {
+        val controller = createCaptureController(
+            recordingAudioPlanProvider = {
+                RecordingAudioPlan(
+                    RecordingAudioSource.LinkAudioUnavailable(
+                        LinkAudioUnavailableReason.PCM_NOT_READY
+                    )
+                )
+            }
+        )
+
+        controller.startVideoRecording()
+        advanceUntilIdle()
+
+        assertThat(fakeCameraSystem.numVideoRecordingStarts).isEqualTo(0)
+        val event = captureEvents.receive() as VideoCaptureEvent.VideoCaptureError
+        assertThat(event.error).hasMessageThat().contains("PCM_NOT_READY")
+    }
+
+    @Test
     fun setLockedRecording_updatesTrackedCaptureUiState() {
         val controller = createCaptureController()
         controller.setLockedRecording(true)
@@ -326,6 +390,7 @@ private class TestCameraSystem(private val delegate: FakeCameraSystem) :
     var savedImageUri: Uri? = null
     var savedVideoUri: Uri = Uri.EMPTY
     var videoRecordError: Throwable? = null
+    var lastRecordingAudioPlan: RecordingAudioPlan = RecordingAudioPlan()
 
     override suspend fun takePicture(
         contentResolver: ContentResolver,
@@ -338,9 +403,11 @@ private class TestCameraSystem(private val delegate: FakeCameraSystem) :
 
     override suspend fun startVideoRecording(
         saveLocation: SaveLocation,
+        audioPlan: RecordingAudioPlan,
         onVideoRecord: (OnVideoRecordEvent) -> Unit
     ) {
-        delegate.startVideoRecording(saveLocation, onVideoRecord)
+        lastRecordingAudioPlan = audioPlan
+        delegate.startVideoRecording(saveLocation, audioPlan, onVideoRecord)
         val error = videoRecordError
         if (error != null) {
             onVideoRecord(OnVideoRecordEvent.OnVideoRecordError(error))

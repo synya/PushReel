@@ -16,14 +16,20 @@
 package com.google.jetpackcamera.feature.preview
 
 import com.google.common.truth.Truth.assertThat
+import com.google.jetpackcamera.model.RecordingAudioSource
+import com.google.jetpackcamera.model.RecordingPcmReadResult
+import com.pushreel.linkaudio.LinkAudioBufferMetadata
 import com.pushreel.linkaudio.LinkAudioChannel
+import com.pushreel.linkaudio.LinkAudioPcmRead
 import com.pushreel.linkaudio.LinkAudioPcmStatus
 import com.pushreel.linkaudio.LinkAudioStatus
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.advanceUntilIdle
+import kotlinx.coroutines.test.runTest
 import org.junit.Test
 
 @OptIn(ExperimentalCoroutinesApi::class)
@@ -198,6 +204,145 @@ class LinkAudioUiStateTest {
             "Underruns 2"
         ).inOrder()
     }
+
+    @Test
+    fun recordingAudioPlanUsesReadySelectedLinkChannel() = runTest {
+        val client = FakeLinkAudioClient()
+        val controller = DefaultLinkAudioController(client)
+        controller.setEnabled(true)
+        controller.selectChannel(channel.id)
+        client.status.value = LinkAudioStatus(
+            linkEnabled = true,
+            linkAudioEnabled = true,
+            peerCount = 1,
+            channels = listOf(channel)
+        )
+        client.pcmStatus.value = LinkAudioPcmStatus(
+            selectedChannelId = channel.id,
+            generation = 7,
+            channelSelected = true,
+            sampleRate = 48_000,
+            channelCount = 2
+        )
+        client.nextRead = LinkAudioPcmRead(
+            framesRead = 2,
+            metadata = LinkAudioBufferMetadata(
+                bufferCount = 9,
+                sessionBeatTime = 12.5,
+                tempo = 120.0,
+                sessionId = "0102030405060708",
+                sampleRate = 48_000,
+                bufferFrames = 128,
+                offsetFrames = 4
+            )
+        )
+
+        val source = controller.recordingAudioPlan().source as RecordingAudioSource.LinkAudioReady
+        val read = source.reader.read(ShortArray(4), 2)
+
+        assertThat(source.channelId).isEqualTo(channel.id)
+        assertThat(source.channelName).isEqualTo("Main")
+        assertThat(source.peerName).isEqualTo("Push 3")
+        assertThat(source.sampleRate).isEqualTo(48_000)
+        assertThat(source.selectionGeneration).isEqualTo(7)
+        assertThat(read).isInstanceOf(RecordingPcmReadResult.Data::class.java)
+        read as RecordingPcmReadResult.Data
+        assertThat(read.framesRead).isEqualTo(2)
+        assertThat(read.metadata.bufferCount).isEqualTo(9)
+    }
+
+    @Test
+    fun recordingAudioPlanFallsBackAndCapturedReaderRejectsChangedSelection() = runTest {
+        val client = FakeLinkAudioClient()
+        val controller = DefaultLinkAudioController(client)
+
+        assertThat(controller.recordingAudioPlan().source)
+            .isEqualTo(RecordingAudioSource.CameraDefault)
+
+        controller.setEnabled(true)
+        controller.selectChannel(channel.id)
+        client.status.value = LinkAudioStatus(
+            linkEnabled = true,
+            linkAudioEnabled = true,
+            channels = listOf(channel)
+        )
+        client.pcmStatus.value = LinkAudioPcmStatus(
+            selectedChannelId = channel.id,
+            generation = 3,
+            channelSelected = true,
+            sampleRate = 48_000,
+            channelCount = 2
+        )
+        val source = controller.recordingAudioPlan().source as RecordingAudioSource.LinkAudioReady
+        client.pcmStatus.value = client.pcmStatus.value.copy(generation = 4)
+
+        assertThat(source.reader.read(ShortArray(2), 1))
+            .isInstanceOf(RecordingPcmReadResult.SourceInvalidated::class.java)
+        assertThat(client.readCount).isEqualTo(0)
+    }
+
+    @Test
+    fun requestedButNotReadyLinkAudioDoesNotFallBackToCameraDefault() {
+        val client = FakeLinkAudioClient()
+        val controller = DefaultLinkAudioController(client)
+        controller.setEnabled(true)
+
+        assertThat(controller.recordingAudioPlan().source)
+            .isInstanceOf(RecordingAudioSource.LinkAudioUnavailable::class.java)
+    }
+
+    @Test
+    fun recordingReaderDistinguishesUnderrunAndError() = runTest {
+        val client = FakeLinkAudioClient()
+        val controller = DefaultLinkAudioController(client)
+        controller.setEnabled(true)
+        controller.selectChannel(channel.id)
+        client.status.value = LinkAudioStatus(
+            linkEnabled = true,
+            linkAudioEnabled = true,
+            channels = listOf(channel)
+        )
+        client.pcmStatus.value = LinkAudioPcmStatus(
+            selectedChannelId = channel.id,
+            generation = 5,
+            channelSelected = true,
+            sampleRate = 48_000,
+            channelCount = 2
+        )
+        val source = controller.recordingAudioPlan().source as RecordingAudioSource.LinkAudioReady
+
+        assertThat(source.reader.read(ShortArray(2), 1))
+            .isEqualTo(RecordingPcmReadResult.Underrun)
+        client.readError = IllegalStateException("native read failed")
+        assertThat(source.reader.read(ShortArray(2), 1))
+            .isInstanceOf(RecordingPcmReadResult.Error::class.java)
+    }
+
+    @Test
+    fun recordingReaderDoesNotConvertCancellationToError() = runTest {
+        val client = FakeLinkAudioClient()
+        val controller = DefaultLinkAudioController(client)
+        controller.setEnabled(true)
+        controller.selectChannel(channel.id)
+        client.status.value = LinkAudioStatus(
+            linkEnabled = true,
+            linkAudioEnabled = true,
+            channels = listOf(channel)
+        )
+        client.pcmStatus.value = LinkAudioPcmStatus(
+            selectedChannelId = channel.id,
+            generation = 6,
+            channelSelected = true,
+            sampleRate = 48_000,
+            channelCount = 2
+        )
+        client.readError = CancellationException("recording stopped")
+        val source = controller.recordingAudioPlan().source as RecordingAudioSource.LinkAudioReady
+
+        val error = runCatching { source.reader.read(ShortArray(2), 1) }.exceptionOrNull()
+
+        assertThat(error).isInstanceOf(CancellationException::class.java)
+    }
 }
 
 private class FakeLinkAudioClient : LinkAudioClientFacade {
@@ -205,10 +350,18 @@ private class FakeLinkAudioClient : LinkAudioClientFacade {
     override val pcmStatus = MutableStateFlow(LinkAudioPcmStatus())
     val selectedChannelIds = mutableListOf<String?>()
     var closed = false
+    var readCount = 0
+    var nextRead = LinkAudioPcmRead(framesRead = 0, metadata = null)
+    var readError: Exception? = null
 
     override fun setEnabled(enabled: Boolean) = Unit
     override fun selectChannel(channelId: String?) {
         selectedChannelIds += channelId
+    }
+    override suspend fun readPcmFrames(destination: ShortArray, maxFrames: Int): LinkAudioPcmRead {
+        readCount++
+        readError?.let { throw it }
+        return nextRead
     }
     override fun close() {
         closed = true

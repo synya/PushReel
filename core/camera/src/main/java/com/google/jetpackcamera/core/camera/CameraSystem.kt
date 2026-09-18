@@ -29,6 +29,7 @@ import com.google.jetpackcamera.model.FlashMode
 import com.google.jetpackcamera.model.ImageOutputFormat
 import com.google.jetpackcamera.model.LensFacing
 import com.google.jetpackcamera.model.LowLightBoostPriority
+import com.google.jetpackcamera.model.RecordingAudioPlan
 import com.google.jetpackcamera.model.SaveLocation
 import com.google.jetpackcamera.model.StabilizationMode
 import com.google.jetpackcamera.model.TestPattern
@@ -91,6 +92,7 @@ interface CameraSystem {
      */
     suspend fun startVideoRecording(
         saveLocation: SaveLocation,
+        audioPlan: RecordingAudioPlan = RecordingAudioPlan(),
         onVideoRecord: (OnVideoRecordEvent) -> Unit
     )
 

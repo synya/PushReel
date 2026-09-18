@@ -77,6 +77,7 @@ import com.google.jetpackcamera.model.Illuminant
 import com.google.jetpackcamera.model.ImageOutputFormat
 import com.google.jetpackcamera.model.LensFacing
 import com.google.jetpackcamera.model.LowLightBoostState
+import com.google.jetpackcamera.model.RecordingAudioPlan
 import com.google.jetpackcamera.model.SaveLocation
 import com.google.jetpackcamera.model.StabilizationMode
 import com.google.jetpackcamera.model.TARGET_FPS_AUTO
@@ -1178,10 +1179,15 @@ private suspend fun runVideoRecording(
     maxDurationMillis: Long,
     transientSettings: StateFlow<TransientSessionSettings?>,
     saveLocation: SaveLocation,
+    audioPlan: RecordingAudioPlan,
     videoControlEvents: Channel<VideoCaptureControlEvent>,
     onVideoRecord: (OnVideoRecordEvent) -> Unit,
     filePathGenerator: FilePathGenerator
 ) = coroutineScope {
+    // CameraX Recorder remains the active backend in this preparatory slice. The captured plan is
+    // intentionally carried into the session so the custom encoder can consume it next.
+    @Suppress("UNUSED_VARIABLE")
+    val capturedAudioPlan = audioPlan
     var currentSettings = transientSettings.filterNotNull().first()
 
     getPendingRecording(
@@ -1258,6 +1264,7 @@ internal suspend fun processVideoControlEvents(
                     event.maxVideoDuration,
                     transientSettings,
                     event.saveLocation,
+                    event.audioPlan,
                     videoCaptureControlEvents,
                     event.onVideoRecord,
                     filePathGenerator
