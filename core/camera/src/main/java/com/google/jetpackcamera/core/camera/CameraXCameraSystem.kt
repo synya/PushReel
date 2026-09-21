@@ -64,6 +64,7 @@ import com.google.jetpackcamera.model.LowLightBoostAvailability
 import com.google.jetpackcamera.model.LowLightBoostPriority
 import com.google.jetpackcamera.model.LowLightBoostState
 import com.google.jetpackcamera.model.RecordingAudioPlan
+import com.google.jetpackcamera.model.RecordingAudioSource
 import com.google.jetpackcamera.model.SaveLocation
 import com.google.jetpackcamera.model.StabilizationMode
 import com.google.jetpackcamera.model.TARGET_FPS_15
@@ -81,13 +82,17 @@ import com.google.jetpackcamera.settings.model.forCurrentLens
 import java.io.File
 import java.io.FileNotFoundException
 import javax.inject.Provider
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.flow.map
@@ -125,6 +130,7 @@ class CameraXCameraSystem(
     private val focusMeteringEvents =
         Channel<CameraEvent.FocusMeteringEvent>(capacity = Channel.CONFLATED)
     private val videoCaptureControlEvents = Channel<VideoCaptureControlEvent>()
+    private val recordingBackendCoordinator = RecordingBackendSessionCoordinator()
 
     private val currentSettings = MutableStateFlow<CameraAppSettings?>(null)
 
@@ -402,101 +408,116 @@ class CameraXCameraSystem(
         }
 
         val transientSettings = MutableStateFlow<TransientSessionSettings?>(null)
-        currentSettings
-            .filterNotNull()
-            .map { currentCameraSettings ->
-                transientSettings.value = TransientSessionSettings(
-                    isAudioEnabled = currentCameraSettings.audioEnabled,
-                    deviceRotation = currentCameraSettings.deviceRotation,
-                    flashMode = currentCameraSettings.flashMode,
-                    primaryLensFacing = currentCameraSettings.cameraLensFacing,
-                    zoomRatios = currentCameraSettings.defaultZoomRatios,
-                    testPattern = currentCameraSettings.debugSettings.testPattern
-                )
+        combine(
+            currentSettings.filterNotNull(),
+            recordingBackendCoordinator.requestedBinding
+        ) { currentCameraSettings, recordingBackend ->
+            transientSettings.value = TransientSessionSettings(
+                isAudioEnabled = currentCameraSettings.audioEnabled,
+                deviceRotation = currentCameraSettings.deviceRotation,
+                flashMode = currentCameraSettings.flashMode,
+                primaryLensFacing = currentCameraSettings.cameraLensFacing,
+                zoomRatios = currentCameraSettings.defaultZoomRatios,
+                testPattern = currentCameraSettings.debugSettings.testPattern
+            )
 
-                when (currentCameraSettings.concurrentCameraMode) {
-                    ConcurrentCameraMode.OFF -> {
-                        val cameraConstraints = checkNotNull(
-                            systemConstraints.forCurrentLens(currentCameraSettings)
-                        ) {
-                            "Could not retrieve constraints for " +
-                                "${currentCameraSettings.cameraLensFacing}"
-                        }
-
-                        val resolvedStabilizationMode = resolveStabilizationMode(
-                            requestedStabilizationMode = currentCameraSettings.stabilizationMode,
-                            targetFrameRate = currentCameraSettings.targetFrameRate,
-                            cameraConstraints = cameraConstraints,
-                            concurrentCameraMode = currentCameraSettings.concurrentCameraMode
-                        )
-
-                        val activeCameraEffect = cameraEffectProviders.keys.firstOrNull {
-                            it.id == currentCameraSettings.selectedCameraEffect
-                        }
-
-                        PerpetualSessionSettings.SingleCamera(
-                            aspectRatio = currentCameraSettings.aspectRatio,
-                            captureMode = currentCameraSettings.captureMode,
-                            activeCameraEffect = activeCameraEffect,
-                            targetFrameRate = currentCameraSettings.targetFrameRate,
-                            stabilizationMode = resolvedStabilizationMode,
-                            dynamicRange = currentCameraSettings.dynamicRange,
-                            videoQuality = currentCameraSettings.videoQuality,
-                            imageFormat = currentCameraSettings.imageFormat,
-                            lowLightBoostPriority = currentCameraSettings.lowLightBoostPriority
-                        )
+            when (currentCameraSettings.concurrentCameraMode) {
+                ConcurrentCameraMode.OFF -> {
+                    val cameraConstraints = checkNotNull(
+                        systemConstraints.forCurrentLens(currentCameraSettings)
+                    ) {
+                        "Could not retrieve constraints for " +
+                            "${currentCameraSettings.cameraLensFacing}"
                     }
 
-                    ConcurrentCameraMode.DUAL -> {
-                        val primaryFacing = currentCameraSettings.cameraLensFacing
-                        val secondaryFacing = primaryFacing.flip()
-                        cameraProvider.availableConcurrentCameraInfos.firstNotNullOf {
-                            var primaryCameraInfo: CameraInfo? = null
-                            var secondaryCameraInfo: CameraInfo? = null
-                            it.forEach { cameraInfo ->
-                                if (cameraInfo.appLensFacing == primaryFacing) {
-                                    primaryCameraInfo = cameraInfo
-                                } else if (cameraInfo.appLensFacing == secondaryFacing) {
-                                    secondaryCameraInfo = cameraInfo
-                                }
-                            }
+                    val resolvedStabilizationMode = resolveStabilizationMode(
+                        requestedStabilizationMode = currentCameraSettings.stabilizationMode,
+                        targetFrameRate = currentCameraSettings.targetFrameRate,
+                        cameraConstraints = cameraConstraints,
+                        concurrentCameraMode = currentCameraSettings.concurrentCameraMode
+                    )
 
-                            primaryCameraInfo?.let { nonNullPrimary ->
-                                secondaryCameraInfo?.let { nonNullSecondary ->
-                                    PerpetualSessionSettings.ConcurrentCamera(
-                                        primaryCameraInfo = nonNullPrimary,
-                                        secondaryCameraInfo = nonNullSecondary,
-                                        aspectRatio = currentCameraSettings.aspectRatio
-                                    )
-                                }
+                    val activeCameraEffect = cameraEffectProviders.keys.firstOrNull {
+                        it.id == currentCameraSettings.selectedCameraEffect
+                    }
+
+                    PerpetualSessionSettings.SingleCamera(
+                        aspectRatio = currentCameraSettings.aspectRatio,
+                        captureMode = currentCameraSettings.captureMode,
+                        activeCameraEffect = activeCameraEffect,
+                        targetFrameRate = currentCameraSettings.targetFrameRate,
+                        stabilizationMode = resolvedStabilizationMode,
+                        dynamicRange = currentCameraSettings.dynamicRange,
+                        videoQuality = currentCameraSettings.videoQuality,
+                        imageFormat = currentCameraSettings.imageFormat,
+                        lowLightBoostPriority = currentCameraSettings.lowLightBoostPriority,
+                        recordingBackend = recordingBackend
+                    )
+                }
+
+                ConcurrentCameraMode.DUAL -> {
+                    val primaryFacing = currentCameraSettings.cameraLensFacing
+                    val secondaryFacing = primaryFacing.flip()
+                    cameraProvider.availableConcurrentCameraInfos.firstNotNullOf {
+                        var primaryCameraInfo: CameraInfo? = null
+                        var secondaryCameraInfo: CameraInfo? = null
+                        it.forEach { cameraInfo ->
+                            if (cameraInfo.appLensFacing == primaryFacing) {
+                                primaryCameraInfo = cameraInfo
+                            } else if (cameraInfo.appLensFacing == secondaryFacing) {
+                                secondaryCameraInfo = cameraInfo
+                            }
+                        }
+
+                        primaryCameraInfo?.let { nonNullPrimary ->
+                            secondaryCameraInfo?.let { nonNullSecondary ->
+                                PerpetualSessionSettings.ConcurrentCamera(
+                                    primaryCameraInfo = nonNullPrimary,
+                                    secondaryCameraInfo = nonNullSecondary,
+                                    aspectRatio = currentCameraSettings.aspectRatio,
+                                    recordingBackend = recordingBackend
+                                )
                             }
                         }
                     }
                 }
-            }.distinctUntilChanged()
-            .collectLatest { sessionSettings ->
+            }
+        }.distinctUntilChanged()
+            // Begin the replacement before collectLatest cancels the previous session. Its
+            // cleanup therefore cannot publish a failure over the replacement's Binding state.
+            .map { sessionSettings ->
+                sessionSettings to recordingBackendCoordinator.beginSession(
+                    sessionSettings.recordingBackend
+                )
+            }
+            .collectLatest { (sessionSettings, sessionToken) ->
+                val tokenOwnedByOuterSession =
+                    sessionSettings is PerpetualSessionSettings.ConcurrentCamera
+                var sessionFailure: Throwable? = null
                 coroutineScope {
-                    with(
-                        CameraSessionContext(
-                            context = application,
-                            cameraProvider = cameraProvider,
-                            backgroundDispatcher = defaultDispatcher,
-                            screenFlashEvents = screenFlashEvents,
-                            filePathGenerator = filePathGenerator,
-                            focusMeteringEvents = focusMeteringEvents,
-                            videoCaptureControlEvents = videoCaptureControlEvents,
-                            currentCameraState = currentCameraState,
-                            surfaceRequests = _surfaceRequest,
-                            transientSettings = transientSettings,
-                            lowLightBoostEffectProvider = lowLightBoostEffectProvider,
-                            cameraEffectProviders = cameraEffectProviders
-                        )
-                    ) {
-                        try {
+                    try {
+                        with(
+                            CameraSessionContext(
+                                context = application,
+                                cameraProvider = cameraProvider,
+                                backgroundDispatcher = defaultDispatcher,
+                                screenFlashEvents = screenFlashEvents,
+                                filePathGenerator = filePathGenerator,
+                                focusMeteringEvents = focusMeteringEvents,
+                                videoCaptureControlEvents = videoCaptureControlEvents,
+                                currentCameraState = currentCameraState,
+                                surfaceRequests = _surfaceRequest,
+                                transientSettings = transientSettings,
+                                lowLightBoostEffectProvider = lowLightBoostEffectProvider,
+                                cameraEffectProviders = cameraEffectProviders
+                            )
+                        ) {
                             when (sessionSettings) {
                                 is PerpetualSessionSettings.SingleCamera -> runSingleCameraSession(
                                     sessionSettings,
                                     systemConstraints.forCurrentLens(currentSettings.value!!),
+                                    initialSessionToken = sessionToken,
+                                    recordingBackendCoordinator = recordingBackendCoordinator,
                                     onImageCaptureCreated = { imageCapture ->
                                         imageCaptureUseCase = imageCapture
                                     }
@@ -505,15 +526,28 @@ class CameraXCameraSystem(
                                 is PerpetualSessionSettings.ConcurrentCamera ->
                                     runConcurrentCameraSession(
                                         sessionSettings,
-                                        systemConstraints.forCurrentLens(currentSettings.value!!)
+                                        systemConstraints.forCurrentLens(currentSettings.value!!),
+                                        onSessionBound = {
+                                            recordingBackendCoordinator.acknowledgeBound(
+                                                sessionToken
+                                            )
+                                        }
                                     )
                             }
-                        } finally {
-                            // TODO(tm): This shouldn't be necessary. Cancellation of the
-                            //  coroutineScope by collectLatest should cause this to
-                            //  occur naturally.
-                            cameraProvider.unbindAll()
                         }
+                    } catch (throwable: Throwable) {
+                        sessionFailure = throwable
+                        throw throwable
+                    } finally {
+                        if (tokenOwnedByOuterSession) {
+                            recordingBackendCoordinator.endSession(
+                                sessionToken,
+                                sessionFailure ?: CancellationException("Camera session ended")
+                            )
+                        }
+                        // TODO(tm): This shouldn't be necessary. Cancellation of the
+                        //  coroutineScope by collectLatest should cause this to occur naturally.
+                        cameraProvider.unbindAll()
                     }
                 }
             }
@@ -648,6 +682,18 @@ class CameraXCameraSystem(
         audioPlan: RecordingAudioPlan,
         onVideoRecord: (OnVideoRecordEvent) -> Unit
     ) {
+        val requiredBackend = when (audioPlan.source) {
+            RecordingAudioSource.CameraDefault -> RecordingBackendIdentity.CAMERA_X_RECORDER
+            is RecordingAudioSource.LinkAudioReady,
+            is RecordingAudioSource.LinkAudioUnavailable ->
+                RecordingBackendIdentity.PUSHREEL_MEDIA_CODEC
+        }
+        require(requiredBackend == RecordingBackendIdentity.CAMERA_X_RECORDER) {
+            "The PushReel MediaCodec recording backend is not available yet"
+        }
+        val requestedBinding = recordingBackendCoordinator.request(requiredBackend)
+        recordingBackendCoordinator.awaitBound(requestedBinding)
+        currentCoroutineContext().ensureActive()
         videoCaptureControlEvents.send(
             VideoCaptureControlEvent.StartRecordingEvent(
                 saveLocation,

@@ -38,6 +38,7 @@ import com.google.jetpackcamera.model.VideoQuality
 internal sealed interface PerpetualSessionSettings {
     val aspectRatio: AspectRatio
     val captureMode: CaptureMode
+    val recordingBackend: RecordingBackendBinding
 
     data class SingleCamera(
         override val aspectRatio: AspectRatio,
@@ -48,7 +49,8 @@ internal sealed interface PerpetualSessionSettings {
         val dynamicRange: DynamicRange,
         val videoQuality: VideoQuality,
         val imageFormat: ImageOutputFormat,
-        val lowLightBoostPriority: LowLightBoostPriority
+        val lowLightBoostPriority: LowLightBoostPriority,
+        override val recordingBackend: RecordingBackendBinding
     ) : PerpetualSessionSettings
 
     /**
@@ -58,7 +60,8 @@ internal sealed interface PerpetualSessionSettings {
     data class ConcurrentCamera(
         val primaryCameraInfo: CameraInfo,
         val secondaryCameraInfo: CameraInfo,
-        override val aspectRatio: AspectRatio
+        override val aspectRatio: AspectRatio,
+        override val recordingBackend: RecordingBackendBinding
     ) : PerpetualSessionSettings {
         override val captureMode: CaptureMode = CaptureMode.VIDEO_ONLY
     }

@@ -96,6 +96,7 @@ import kotlin.coroutines.ContinuationInterceptor
 import kotlin.math.abs
 import kotlin.time.Duration.Companion.milliseconds
 import kotlinx.atomicfu.atomic
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.asExecutor
@@ -110,6 +111,7 @@ import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.onCompletion
 import kotlinx.coroutines.flow.transform
 import kotlinx.coroutines.flow.update
@@ -125,247 +127,288 @@ private val QUALITY_RANGE_MAP = mapOf(
 
 context(CameraSessionContext)
 @ExperimentalCamera2Interop
+@Suppress("ktlint:standard:max-line-length")
 internal suspend fun runSingleCameraSession(
     sessionSettings: PerpetualSessionSettings.SingleCamera,
     cameraConstraints: CameraConstraints?,
+    initialSessionToken: RecordingBackendSessionToken,
+    recordingBackendCoordinator: RecordingBackendSessionCoordinator,
     // TODO(tm): ImageCapture should go through an event channel like VideoCapture
     onImageCaptureCreated: (ImageCapture) -> Unit = {}
-) = coroutineScope {
-    Log.d(TAG, "Starting new single camera session")
-    val initialCameraSelector = transientSettings.filterNotNull().first()
-        .primaryLensFacing.toCameraSelector()
+) = try {
+    coroutineScope {
+        Log.d(TAG, "Starting new single camera session")
+        val initialCameraSelector = transientSettings.filterNotNull().first()
+            .primaryLensFacing.toCameraSelector()
 
-    // only create video use case in standard or video_only
-    val videoCaptureUseCase = when (sessionSettings.captureMode) {
-        CaptureMode.STANDARD, CaptureMode.VIDEO_ONLY ->
-            createVideoUseCase(
-                cameraProvider.getCameraInfo(initialCameraSelector),
-                sessionSettings.aspectRatio,
-                sessionSettings.targetFrameRate,
-                sessionSettings.stabilizationMode,
-                sessionSettings.dynamicRange,
-                sessionSettings.videoQuality,
-                backgroundDispatcher
-            )
-
-        else -> {
-            null
-        }
-    }
-
-    launch {
-        processVideoControlEvents(
-            videoCaptureUseCase,
-            captureTypeSuffix = if (sessionSettings.activeCameraEffect != null) {
-                "SingleStream"
-            } else {
-                "MultiStream"
-            }
-        )
-    }
-
-    transientSettings
-        .filterNotNull()
-        .distinctUntilChanged { old, new ->
-            (
-                old.primaryLensFacing == new.primaryLensFacing &&
-                    !(
-                        (old.flashMode == FlashMode.LOW_LIGHT_BOOST) xor
-                            (new.flashMode == FlashMode.LOW_LIGHT_BOOST)
-                        )
+        // only create video use case in standard or video_only
+        val videoCaptureUseCase = when (sessionSettings.captureMode) {
+            CaptureMode.STANDARD, CaptureMode.VIDEO_ONLY ->
+                createVideoUseCase(
+                    cameraProvider.getCameraInfo(initialCameraSelector),
+                    sessionSettings.aspectRatio,
+                    sessionSettings.targetFrameRate,
+                    sessionSettings.stabilizationMode,
+                    sessionSettings.dynamicRange,
+                    sessionSettings.videoQuality,
+                    backgroundDispatcher
                 )
+
+            else -> {
+                null
+            }
         }
-        .collectLatest { currentTransientSettings ->
-            coroutineScope sessionScope@{
-                cameraProvider.unbindAll()
-                val currentCameraSelector = currentTransientSettings.primaryLensFacing
-                    .toCameraSelector()
-                val cameraInfo = cameraProvider.getCameraInfo(currentCameraSelector)
-                val camera2Info = Camera2CameraInfo.from(cameraInfo)
-                val cameraId = camera2Info.cameraId
 
-                var cameraEffect: CameraEffect? = null
-                val captureResults = MutableStateFlow<TotalCaptureResult?>(null)
-                if (currentTransientSettings.flashMode == FlashMode.LOW_LIGHT_BOOST) {
-                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R &&
-                        cameraConstraints?.supportedIlluminants?.contains(
-                            Illuminant.LOW_LIGHT_BOOST_CAMERA_EFFECT
-                        ) == true && lowLightBoostEffectProvider != null
-                    ) {
-                        cameraEffect = lowLightBoostEffectProvider.create(
-                            cameraId = cameraId,
-                            captureResults = captureResults,
-                            coroutineScope = this@sessionScope,
-                            onSceneBrightnessChanged = { boostStrength ->
-                                val strength = LowLightBoostState.Active(strength = boostStrength)
-                                currentCameraState.update { old ->
-                                    if (old.lowLightBoostState != strength) {
-                                        old.copy(lowLightBoostState = strength)
-                                    } else {
-                                        old
-                                    }
-                                }
-                            },
-                            onLowLightBoostError = { e ->
-                                Log.w(TAG, "Emitting LLB Error", e)
-                                currentCameraState.update { old ->
-                                    old.copy(lowLightBoostState = LowLightBoostState.Error(e))
-                                }
-                            }
-                        )
-                    }
+        launch {
+            processVideoControlEvents(
+                videoCaptureUseCase,
+                captureTypeSuffix = if (sessionSettings.activeCameraEffect != null) {
+                    "SingleStream"
+                } else {
+                    "MultiStream"
                 }
-                if (cameraEffect == null) {
-                    sessionSettings.activeCameraEffect?.let { key ->
-                        cameraEffect = cameraEffectProviders[key]?.createEffect(this@sessionScope)
-                    }
-                }
-                val useCaseGroup = createUseCaseGroup(
-                    cameraInfo = cameraProvider.getCameraInfo(currentCameraSelector),
-                    videoCaptureUseCase = videoCaptureUseCase,
-                    initialTransientSettings = currentTransientSettings,
-                    stabilizationMode = sessionSettings.stabilizationMode,
-                    aspectRatio = sessionSettings.aspectRatio,
-                    imageFormat = sessionSettings.imageFormat,
-                    captureMode = sessionSettings.captureMode,
-                    effect = cameraEffect,
-                    captureResults = captureResults
+            )
+        }
 
-                ).apply {
-                    getImageCapture()?.let(onImageCaptureCreated)
-                }
-
-                cameraProvider.runWith(
-                    currentCameraSelector,
-                    useCaseGroup
-                ) { camera ->
-                    Log.d(TAG, "Camera session started")
-                    launch {
-                        processFocusMeteringEvents(
-                            camera.cameraInfo,
-                            camera.cameraControl,
-                            captureResults = captureResults
-                        )
-                    }
-
-                    launch {
-                        camera.cameraInfo.torchState.asFlow().collectLatest { torchState ->
-                            currentCameraState.update { old ->
-                                old.copy(isTorchEnabled = torchState == TorchState.ON)
-                            }
-                        }
-                    }
-
-                    if (videoCaptureUseCase != null) {
-                        val videoQuality = getVideoQualityFromResolution(
-                            videoCaptureUseCase.resolutionInfo?.resolution
-                        )
-                        if (videoQuality != sessionSettings.videoQuality) {
-                            Log.e(
-                                TAG,
-                                "Failed to select video quality: $sessionSettings.videoQuality. " +
-                                    "Fallback: $videoQuality"
+        var isInitialBinding = true
+        transientSettings
+            .filterNotNull()
+            .distinctUntilChanged { old, new ->
+                (
+                    old.primaryLensFacing == new.primaryLensFacing &&
+                        !(
+                            (old.flashMode == FlashMode.LOW_LIGHT_BOOST) xor
+                                (new.flashMode == FlashMode.LOW_LIGHT_BOOST)
                             )
-                        }
-                        launch {
-                            currentCameraState.update { old ->
-                                old.copy(
-                                    videoQualityInfo = VideoQualityInfo(
-                                        videoQuality,
-                                        getWidthFromCropRect(
-                                            videoCaptureUseCase.resolutionInfo?.cropRect
-                                        ),
-                                        getHeightFromCropRect(
-                                            videoCaptureUseCase.resolutionInfo?.cropRect
+                    )
+            }
+            // Allocate the replacement before collectLatest cancels the previous concrete bind.
+            .map { settings ->
+                val token = if (isInitialBinding) {
+                    isInitialBinding = false
+                    initialSessionToken
+                } else {
+                    recordingBackendCoordinator.beginSession(sessionSettings.recordingBackend)
+                }
+                settings to token
+            }
+            .collectLatest { (currentTransientSettings, sessionToken) ->
+                var bindFailure: Throwable? = null
+                try {
+                    coroutineScope sessionScope@{
+                        cameraProvider.unbindAll()
+                        val currentCameraSelector = currentTransientSettings.primaryLensFacing
+                            .toCameraSelector()
+                        val cameraInfo = cameraProvider.getCameraInfo(currentCameraSelector)
+                        val camera2Info = Camera2CameraInfo.from(cameraInfo)
+                        val cameraId = camera2Info.cameraId
+
+                        var cameraEffect: CameraEffect? = null
+                        val captureResults = MutableStateFlow<TotalCaptureResult?>(null)
+                        if (currentTransientSettings.flashMode == FlashMode.LOW_LIGHT_BOOST) {
+                            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R &&
+                                cameraConstraints?.supportedIlluminants?.contains(
+                                    Illuminant.LOW_LIGHT_BOOST_CAMERA_EFFECT
+                                ) == true && lowLightBoostEffectProvider != null
+                            ) {
+                                cameraEffect = lowLightBoostEffectProvider.create(
+                                    cameraId = cameraId,
+                                    captureResults = captureResults,
+                                    coroutineScope = this@sessionScope,
+                                    onSceneBrightnessChanged = { boostStrength ->
+                                        val strength = LowLightBoostState.Active(
+                                            strength = boostStrength
                                         )
-                                    )
-                                )
-                            }
-                        }
-                    }
-
-                    // Update CameraState to reflect when camera is running
-                    launch {
-                        camera.cameraInfo.cameraState
-                            .asFlow()
-                            .filterNotNull()
-                            .distinctUntilChanged()
-                            .onCompletion {
-                                currentCameraState.update { old ->
-                                    old.copy(
-                                        isCameraRunning = false
-                                    )
-                                }
-                            }
-                            .collectLatest { cameraState ->
-                                currentCameraState.update { old ->
-                                    old.copy(
-                                        isCameraRunning =
-                                        cameraState.type == CXCameraState.Type.OPEN
-                                    )
-                                }
-                            }
-                    }
-
-                    // Update CameraState to mirror current ZoomState
-                    launch {
-                        camera.cameraInfo.zoomState
-                            .asFlow()
-                            .filterNotNull()
-                            .distinctUntilChanged()
-                            .onCompletion {
-                                // reset current camera state when changing cameras.
-                                currentCameraState.update { old ->
-                                    old.copy(
-                                        zoomRatios = emptyMap(),
-                                        linearZoomScales = emptyMap()
-                                    )
-                                }
-                            }
-                            .collectLatest { zoomState ->
-                                // TODO(b/405987189): remove checks after buggy zoomState is fixed
-                                if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) {
-                                    if (zoomState.zoomRatio != 1.0f ||
-                                        zoomState.zoomRatio == currentTransientSettings
-                                            .zoomRatios[currentTransientSettings.primaryLensFacing]
-                                    ) {
+                                        currentCameraState.update { old ->
+                                            if (old.lowLightBoostState != strength) {
+                                                old.copy(lowLightBoostState = strength)
+                                            } else {
+                                                old
+                                            }
+                                        }
+                                    },
+                                    onLowLightBoostError = { e ->
+                                        Log.w(TAG, "Emitting LLB Error", e)
                                         currentCameraState.update { old ->
                                             old.copy(
-                                                zoomRatios = old.zoomRatios
-                                                    .toMutableMap()
-                                                    .apply {
-                                                        put(
-                                                            camera.cameraInfo.appLensFacing,
-                                                            zoomState.zoomRatio
-                                                        )
-                                                    }.toMap(),
-                                                linearZoomScales = old.linearZoomScales
-                                                    .toMutableMap()
-                                                    .apply {
-                                                        put(
-                                                            camera.cameraInfo.appLensFacing,
-                                                            zoomState.linearZoom
-                                                        )
-                                                    }.toMap()
+                                                lowLightBoostState = LowLightBoostState.Error(e)
                                             )
                                         }
                                     }
+                                )
+                            }
+                        }
+                        if (cameraEffect == null) {
+                            sessionSettings.activeCameraEffect?.let { key ->
+                                cameraEffect = cameraEffectProviders[key]?.createEffect(
+                                    this@sessionScope
+                                )
+                            }
+                        }
+                        val useCaseGroup = createUseCaseGroup(
+                            cameraInfo = cameraProvider.getCameraInfo(currentCameraSelector),
+                            videoCaptureUseCase = videoCaptureUseCase,
+                            initialTransientSettings = currentTransientSettings,
+                            stabilizationMode = sessionSettings.stabilizationMode,
+                            aspectRatio = sessionSettings.aspectRatio,
+                            imageFormat = sessionSettings.imageFormat,
+                            captureMode = sessionSettings.captureMode,
+                            effect = cameraEffect,
+                            captureResults = captureResults
+
+                        ).apply {
+                            getImageCapture()?.let(onImageCaptureCreated)
+                        }
+
+                        cameraProvider.runWith(
+                            currentCameraSelector,
+                            useCaseGroup
+                        ) { camera ->
+                            Log.d(TAG, "Camera session started")
+                            recordingBackendCoordinator.acknowledgeBound(sessionToken)
+                            launch {
+                                processFocusMeteringEvents(
+                                    camera.cameraInfo,
+                                    camera.cameraControl,
+                                    captureResults = captureResults
+                                )
+                            }
+
+                            launch {
+                                camera.cameraInfo.torchState.asFlow().collectLatest { torchState ->
+                                    currentCameraState.update { old ->
+                                        old.copy(isTorchEnabled = torchState == TorchState.ON)
+                                    }
                                 }
                             }
-                    }
 
-                    applyDeviceRotation(currentTransientSettings.deviceRotation, useCaseGroup)
-                    processTransientSettingEvents(
-                        camera,
-                        cameraConstraints,
-                        useCaseGroup,
-                        currentTransientSettings,
-                        transientSettings,
-                        sessionSettings
+                            if (videoCaptureUseCase != null) {
+                                val videoQuality = getVideoQualityFromResolution(
+                                    videoCaptureUseCase.resolutionInfo?.resolution
+                                )
+                                if (videoQuality != sessionSettings.videoQuality) {
+                                    Log.e(
+                                        TAG,
+                                        "Failed to select video quality: $sessionSettings.videoQuality. " +
+                                            "Fallback: $videoQuality"
+                                    )
+                                }
+                                launch {
+                                    currentCameraState.update { old ->
+                                        old.copy(
+                                            videoQualityInfo = VideoQualityInfo(
+                                                videoQuality,
+                                                getWidthFromCropRect(
+                                                    videoCaptureUseCase.resolutionInfo?.cropRect
+                                                ),
+                                                getHeightFromCropRect(
+                                                    videoCaptureUseCase.resolutionInfo?.cropRect
+                                                )
+                                            )
+                                        )
+                                    }
+                                }
+                            }
+
+                            // Update CameraState to reflect when camera is running
+                            launch {
+                                camera.cameraInfo.cameraState
+                                    .asFlow()
+                                    .filterNotNull()
+                                    .distinctUntilChanged()
+                                    .onCompletion {
+                                        currentCameraState.update { old ->
+                                            old.copy(
+                                                isCameraRunning = false
+                                            )
+                                        }
+                                    }
+                                    .collectLatest { cameraState ->
+                                        currentCameraState.update { old ->
+                                            old.copy(
+                                                isCameraRunning =
+                                                cameraState.type == CXCameraState.Type.OPEN
+                                            )
+                                        }
+                                    }
+                            }
+
+                            // Update CameraState to mirror current ZoomState
+                            launch {
+                                camera.cameraInfo.zoomState
+                                    .asFlow()
+                                    .filterNotNull()
+                                    .distinctUntilChanged()
+                                    .onCompletion {
+                                        // reset current camera state when changing cameras.
+                                        currentCameraState.update { old ->
+                                            old.copy(
+                                                zoomRatios = emptyMap(),
+                                                linearZoomScales = emptyMap()
+                                            )
+                                        }
+                                    }
+                                    .collectLatest { zoomState ->
+                                        // TODO(b/405987189): remove checks after buggy zoomState is fixed
+                                        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) {
+                                            if (zoomState.zoomRatio != 1.0f ||
+                                                zoomState.zoomRatio == currentTransientSettings
+                                                    .zoomRatios[currentTransientSettings.primaryLensFacing]
+                                            ) {
+                                                currentCameraState.update { old ->
+                                                    old.copy(
+                                                        zoomRatios = old.zoomRatios
+                                                            .toMutableMap()
+                                                            .apply {
+                                                                put(
+                                                                    camera.cameraInfo.appLensFacing,
+                                                                    zoomState.zoomRatio
+                                                                )
+                                                            }.toMap(),
+                                                        linearZoomScales = old.linearZoomScales
+                                                            .toMutableMap()
+                                                            .apply {
+                                                                put(
+                                                                    camera.cameraInfo.appLensFacing,
+                                                                    zoomState.linearZoom
+                                                                )
+                                                            }.toMap()
+                                                    )
+                                                }
+                                            }
+                                        }
+                                    }
+                            }
+
+                            applyDeviceRotation(
+                                currentTransientSettings.deviceRotation,
+                                useCaseGroup
+                            )
+                            processTransientSettingEvents(
+                                camera,
+                                cameraConstraints,
+                                useCaseGroup,
+                                currentTransientSettings,
+                                transientSettings,
+                                sessionSettings
+                            )
+                        }
+                    }
+                } catch (throwable: Throwable) {
+                    bindFailure = throwable
+                    throw throwable
+                } finally {
+                    recordingBackendCoordinator.endSession(
+                        sessionToken,
+                        bindFailure ?: CancellationException("Camera bind ended")
                     )
                 }
             }
-        }
+    }
+} catch (throwable: Throwable) {
+    // Covers failures before the first concrete bind takes ownership of the initial token.
+    recordingBackendCoordinator.endSession(initialSessionToken, throwable)
+    throw throwable
 }
 
 context(CameraSessionContext)
@@ -1184,10 +1227,7 @@ private suspend fun runVideoRecording(
     onVideoRecord: (OnVideoRecordEvent) -> Unit,
     filePathGenerator: FilePathGenerator
 ) = coroutineScope {
-    // CameraX Recorder remains the active backend in this preparatory slice. The captured plan is
-    // intentionally carried into the session so the custom encoder can consume it next.
-    @Suppress("UNUSED_VARIABLE")
-    val capturedAudioPlan = audioPlan
+    requireCameraXRecorderAudioPlan(audioPlan)
     var currentSettings = transientSettings.filterNotNull().first()
 
     getPendingRecording(

@@ -36,17 +36,26 @@ rejected with a visible capture error before CameraX starts. This prevents both 
 and a temporarily unavailable Link source from silently falling back to the phone
 microphone.
 
-The inherited CameraX Recorder remains the active recording backend. Channel selection
-does not feed external PCM into the recorder yet, and Push 3 audio is not written to
-video at this stage. When Link is disabled, the existing camera audio behavior is
-preserved.
+Recording backend selection is now part of the camera session configuration rather than
+a decision made after CameraX has already bound its use cases. Each concrete CameraX
+bind, including lens and low-light rebinds inside a single-camera session, has a unique
+session token. Recording waits for the exact requested backend generation and concrete
+bind acknowledgement; stale acknowledgements, cancellation, and bind failures cannot
+release a newer request. The Recorder path also validates the captured audio plan and
+accepts only the default camera audio source.
+
+The inherited CameraX Recorder remains the only implemented recording backend. The
+reserved PushReel MediaCodec backend identity now provides the safe pre-bind extension
+point for the next slice, but channel selection does not feed external PCM into an
+encoder yet and Push 3 audio is not written to video at this stage. When Link is
+disabled, the existing camera audio behavior is preserved.
 
 ## Next implementation slice
 
-Verify live PCM reception, FIFO diagnostics, and valid monotonic timestamps from the
-published Ableton channel on the physical phone. Then consume the captured recording
-audio plan in a custom recording backend, put video encoding under application control,
-and add AAC encoding from the buffered Link Audio PCM.
+Implement the `PUSHREEL_MEDIA_CODEC` backend as a CameraX custom `VideoOutput`, configure
+hardware H.264 encoding, and keep its surface lifecycle tied to the acknowledged camera
+session. Then add AAC encoding from the captured Link Audio PCM plan and feed both
+encoded tracks into a coordinated muxer.
 
 AAC encoding, a shared audio/video timebase, custom recording coordination, and MP4
 muxing remain future work. The existing CameraX Recorder is not an external PCM input
@@ -54,7 +63,7 @@ path.
 
 ## Verification
 
-Verified through 2026-09-18:
+Verified through 2026-09-21:
 
 - `:app:assembleStableDebug` completed successfully.
 - The project Spotless checks completed successfully against `upstream/main`.
@@ -75,6 +84,9 @@ Verified through 2026-09-18:
 - Recording controller tests verify that both ready and unavailable Link sources block
   recording before `CameraSystem` is called, while the default camera source still starts
   the inherited recording path.
+- Camera backend coordinator tests cover backend generations, concrete bind
+  incarnations, stale acknowledgement/end rejection, bind failure, cancellation, and
+  the ordering required when an inner CameraX rebind replaces an already-ready bind.
 - The host PCM FIFO test covers descriptor boundaries, overflow/underrun counters,
   sample-rate changes, timing metadata, monotonic clock mapping, partial-read timestamp
   offsets, anchor-cache reuse/reset, bracket rejection, and unsigned ring-position

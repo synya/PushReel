@@ -44,7 +44,8 @@ context(CameraSessionContext)
 @SuppressLint("RestrictedApi")
 internal suspend fun runConcurrentCameraSession(
     sessionSettings: PerpetualSessionSettings.ConcurrentCamera,
-    cameraConstraints: CameraConstraints?
+    cameraConstraints: CameraConstraints?,
+    onSessionBound: () -> Unit = {}
 ) = coroutineScope {
     val primaryLensFacing = sessionSettings.primaryCameraInfo.appLensFacing
     val secondaryLensFacing = sessionSettings.secondaryCameraInfo.appLensFacing
@@ -105,6 +106,7 @@ internal suspend fun runConcurrentCameraSession(
 
     cameraProvider.runWithConcurrent(cameraConfigs, useCaseGroup) { concurrentCamera ->
         Log.d(TAG, "Concurrent camera session started")
+        onSessionBound()
         // todo: concurrent camera only ever lists one camera
         val primaryCamera = concurrentCamera.cameras.first {
             it.cameraInfo.appLensFacing == sessionSettings.primaryCameraInfo.appLensFacing
