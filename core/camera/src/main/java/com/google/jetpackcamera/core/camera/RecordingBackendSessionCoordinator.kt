@@ -111,18 +111,34 @@ internal class RecordingBackendSessionCoordinator(
             }
         }
 
-    fun acknowledgeBound(token: RecordingBackendSessionToken) = synchronized(lock) {
+    fun acknowledgeBound(token: RecordingBackendSessionToken): Boolean = synchronized(lock) {
         if (activeToken == token && _requestedBinding.value == token.binding) {
             _sessionState.value = RecordingBackendSessionState.Ready(token)
+            true
+        } else {
+            false
         }
     }
 
-    fun endSession(token: RecordingBackendSessionToken, cause: Throwable) = synchronized(lock) {
-        if (activeToken == token) {
-            activeToken = null
-            _sessionState.value = RecordingBackendSessionState.Failed(token, cause)
+    fun markBinding(token: RecordingBackendSessionToken): Boolean = synchronized(lock) {
+        if (activeToken == token && _requestedBinding.value == token.binding) {
+            _sessionState.value = RecordingBackendSessionState.Binding(token)
+            true
+        } else {
+            false
         }
     }
+
+    fun endSession(token: RecordingBackendSessionToken, cause: Throwable): Boolean =
+        synchronized(lock) {
+            if (activeToken == token) {
+                activeToken = null
+                _sessionState.value = RecordingBackendSessionState.Failed(token, cause)
+                true
+            } else {
+                false
+            }
+        }
 
     suspend fun awaitBound(binding: RecordingBackendBinding) {
         when (

@@ -40,6 +40,12 @@ import kotlinx.coroutines.launch
 
 private const val TAG = "ConcurrentCameraSession"
 
+internal fun requireSupportedConcurrentRecordingBackend(identity: RecordingBackendIdentity) {
+    require(identity == RecordingBackendIdentity.CAMERA_X_RECORDER) {
+        "PushReel MediaCodec video output does not support concurrent camera sessions"
+    }
+}
+
 context(CameraSessionContext)
 @SuppressLint("RestrictedApi")
 internal suspend fun runConcurrentCameraSession(
@@ -47,6 +53,7 @@ internal suspend fun runConcurrentCameraSession(
     cameraConstraints: CameraConstraints?,
     onSessionBound: () -> Unit = {}
 ) = coroutineScope {
+    requireSupportedConcurrentRecordingBackend(sessionSettings.recordingBackend.identity)
     val primaryLensFacing = sessionSettings.primaryCameraInfo.appLensFacing
     val secondaryLensFacing = sessionSettings.secondaryCameraInfo.appLensFacing
     Log.d(
@@ -121,7 +128,7 @@ internal suspend fun runConcurrentCameraSession(
 
         launch {
             processVideoControlEvents(
-                useCaseGroup.getVideoCapture(),
+                videoCapture,
                 captureTypeSuffix = "DualCam"
             )
         }

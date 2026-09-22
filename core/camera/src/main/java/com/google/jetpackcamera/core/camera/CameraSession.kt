@@ -25,6 +25,7 @@ import android.hardware.camera2.CameraMetadata
 import android.hardware.camera2.CaptureRequest
 import android.hardware.camera2.CaptureResult
 import android.hardware.camera2.TotalCaptureResult
+import android.media.MediaFormat
 import android.os.Build
 import android.os.SystemClock
 import android.provider.MediaStore
@@ -49,20 +50,24 @@ import androidx.camera.core.UseCaseGroup
 import androidx.camera.core.ViewPort
 import androidx.camera.core.resolutionselector.AspectRatioStrategy
 import androidx.camera.core.resolutionselector.ResolutionSelector
+import androidx.camera.core.resolutionselector.ResolutionStrategy
 import androidx.camera.video.AudioStats
 import androidx.camera.video.ExperimentalPersistentRecording
 import androidx.camera.video.FallbackStrategy
 import androidx.camera.video.FileDescriptorOutputOptions
 import androidx.camera.video.FileOutputOptions
+import androidx.camera.video.MediaSpec
 import androidx.camera.video.MediaStoreOutputOptions
 import androidx.camera.video.PendingRecording
 import androidx.camera.video.QualitySelector
 import androidx.camera.video.Recorder
 import androidx.camera.video.Recording
 import androidx.camera.video.VideoCapture
+import androidx.camera.video.VideoOutput
 import androidx.camera.video.VideoRecordEvent
 import androidx.camera.video.VideoRecordEvent.Finalize.ERROR_DURATION_LIMIT_REACHED
 import androidx.camera.video.VideoRecordEvent.Finalize.ERROR_NONE
+import androidx.camera.video.VideoSpec
 import androidx.core.content.ContextCompat
 import androidx.core.content.ContextCompat.checkSelfPermission
 import androidx.core.net.toFile
@@ -99,6 +104,7 @@ import kotlinx.atomicfu.atomic
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.asExecutor
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.coroutineScope
@@ -142,32 +148,43 @@ internal suspend fun runSingleCameraSession(
             .primaryLensFacing.toCameraSelector()
 
         // only create video use case in standard or video_only
-        val videoCaptureUseCase = when (sessionSettings.captureMode) {
+        val videoUseCase = when (sessionSettings.captureMode) {
             CaptureMode.STANDARD, CaptureMode.VIDEO_ONLY ->
-                createVideoUseCase(
+                createVideoUseCaseForBackend(
                     cameraProvider.getCameraInfo(initialCameraSelector),
                     sessionSettings.aspectRatio,
                     sessionSettings.targetFrameRate,
                     sessionSettings.stabilizationMode,
                     sessionSettings.dynamicRange,
                     sessionSettings.videoQuality,
-                    backgroundDispatcher
+                    backgroundDispatcher,
+                    sessionSettings.recordingBackend.identity
                 )
 
             else -> {
                 null
             }
         }
+        require(
+            sessionSettings.recordingBackend.identity ==
+                RecordingBackendIdentity.CAMERA_X_RECORDER ||
+                videoUseCase != null
+        ) { "PushReel MediaCodec backend requires a video capture mode" }
 
-        launch {
-            processVideoControlEvents(
-                videoCaptureUseCase,
-                captureTypeSuffix = if (sessionSettings.activeCameraEffect != null) {
-                    "SingleStream"
-                } else {
-                    "MultiStream"
-                }
-            )
+        videoUseCase?.recorderCapture?.let { recorderCapture ->
+            launch {
+                processVideoControlEvents(
+                    recorderCapture,
+                    captureTypeSuffix = if (sessionSettings.activeCameraEffect != null) {
+                        "SingleStream"
+                    } else {
+                        "MultiStream"
+                    }
+                )
+            }
+        }
+        videoUseCase?.mediaCodecOutput?.let { output ->
+            currentCoroutineContext()[Job]?.invokeOnCompletion { output.close() }
         }
 
         var isInitialBinding = true
@@ -247,7 +264,7 @@ internal suspend fun runSingleCameraSession(
                         }
                         val useCaseGroup = createUseCaseGroup(
                             cameraInfo = cameraProvider.getCameraInfo(currentCameraSelector),
-                            videoCaptureUseCase = videoCaptureUseCase,
+                            videoCaptureUseCase = videoUseCase?.capture,
                             initialTransientSettings = currentTransientSettings,
                             stabilizationMode = sessionSettings.stabilizationMode,
                             aspectRatio = sessionSettings.aspectRatio,
@@ -260,12 +277,22 @@ internal suspend fun runSingleCameraSession(
                             getImageCapture()?.let(onImageCaptureCreated)
                         }
 
+                        val outputGenerationMarker = videoUseCase?.mediaCodecOutput
+                            ?.generationMarker()
                         cameraProvider.runWith(
                             currentCameraSelector,
                             useCaseGroup
                         ) { camera ->
                             Log.d(TAG, "Camera session started")
-                            recordingBackendCoordinator.acknowledgeBound(sessionToken)
+                            if (outputGenerationMarker != null) {
+                                videoUseCase.mediaCodecOutput.awaitReadyAndAttachSession(
+                                    outputGenerationMarker,
+                                    sessionToken,
+                                    recordingBackendCoordinator
+                                )
+                            } else {
+                                recordingBackendCoordinator.acknowledgeBound(sessionToken)
+                            }
                             launch {
                                 processFocusMeteringEvents(
                                     camera.cameraInfo,
@@ -282,9 +309,9 @@ internal suspend fun runSingleCameraSession(
                                 }
                             }
 
-                            if (videoCaptureUseCase != null) {
+                            if (videoUseCase != null) {
                                 val videoQuality = getVideoQualityFromResolution(
-                                    videoCaptureUseCase.resolutionInfo?.resolution
+                                    videoUseCase.capture.resolutionInfo?.resolution
                                 )
                                 if (videoQuality != sessionSettings.videoQuality) {
                                     Log.e(
@@ -299,10 +326,10 @@ internal suspend fun runSingleCameraSession(
                                             videoQualityInfo = VideoQualityInfo(
                                                 videoQuality,
                                                 getWidthFromCropRect(
-                                                    videoCaptureUseCase.resolutionInfo?.cropRect
+                                                    videoUseCase.capture.resolutionInfo?.cropRect
                                                 ),
                                                 getHeightFromCropRect(
-                                                    videoCaptureUseCase.resolutionInfo?.cropRect
+                                                    videoUseCase.capture.resolutionInfo?.cropRect
                                                 )
                                             )
                                         )
@@ -635,7 +662,7 @@ internal fun createUseCaseGroup(
     initialTransientSettings: TransientSessionSettings,
     stabilizationMode: StabilizationMode,
     aspectRatio: AspectRatio,
-    videoCaptureUseCase: VideoCapture<Recorder>?,
+    videoCaptureUseCase: VideoCapture<*>?,
     imageFormat: ImageOutputFormat,
     captureMode: CaptureMode,
     effect: CameraEffect? = null,
@@ -763,6 +790,100 @@ internal fun createVideoUseCase(
     }.build()
 }
 
+internal data class SessionVideoUseCase(
+    val capture: VideoCapture<out VideoOutput>,
+    val recorderCapture: VideoCapture<Recorder>? = null,
+    val mediaCodecOutput: PushReelMediaCodecVideoOutput? = null
+)
+
+internal fun createPushReelMediaSpec(videoQuality: VideoQuality, targetFrameRate: Int): MediaSpec {
+    val quality = videoQuality.toQuality() ?: androidx.camera.video.Quality.FHD
+    val videoSpec = VideoSpec.builder()
+        .setQualitySelector(
+            QualitySelector.from(
+                quality,
+                FallbackStrategy.lowerQualityOrHigherThan(quality)
+            )
+        )
+        .setEncodeFrameRate(if (targetFrameRate == TARGET_FPS_AUTO) 30 else targetFrameRate)
+        .setMimeType(MediaFormat.MIMETYPE_VIDEO_AVC)
+        .build()
+    return MediaSpec.builder().setVideoSpec(videoSpec).build()
+}
+
+internal fun targetLandscapeSize(videoQuality: VideoQuality): Size = when (videoQuality) {
+    VideoQuality.UHD -> Size(3840, 2160)
+    VideoQuality.HD -> Size(1280, 720)
+    VideoQuality.SD -> Size(720, 480)
+    VideoQuality.FHD,
+    VideoQuality.UNSPECIFIED -> Size(1920, 1080)
+}
+
+internal fun createPushReelResolutionSelector(
+    sensorLandscapeRatio: Float,
+    aspectRatio: AspectRatio,
+    videoQuality: VideoQuality
+): ResolutionSelector = ResolutionSelector.Builder()
+    .setAspectRatioStrategy(createAspectRatioStrategy(sensorLandscapeRatio, aspectRatio))
+    .setResolutionStrategy(
+        ResolutionStrategy(
+            targetLandscapeSize(videoQuality),
+            ResolutionStrategy.FALLBACK_RULE_CLOSEST_LOWER_THEN_HIGHER
+        )
+    )
+    .build()
+
+internal fun createVideoUseCaseForBackend(
+    cameraInfo: CameraInfo,
+    aspectRatio: AspectRatio,
+    targetFrameRate: Int,
+    stabilizationMode: StabilizationMode,
+    dynamicRange: DynamicRange,
+    videoQuality: VideoQuality,
+    backgroundDispatcher: CoroutineDispatcher,
+    backendIdentity: RecordingBackendIdentity
+): SessionVideoUseCase = when (backendIdentity) {
+    RecordingBackendIdentity.CAMERA_X_RECORDER -> {
+        val capture = createVideoUseCase(
+            cameraInfo,
+            aspectRatio,
+            targetFrameRate,
+            stabilizationMode,
+            dynamicRange,
+            videoQuality,
+            backgroundDispatcher
+        )
+        SessionVideoUseCase(capture = capture, recorderCapture = capture)
+    }
+
+    RecordingBackendIdentity.PUSHREEL_MEDIA_CODEC -> {
+        require(dynamicRange == DynamicRange.SDR) {
+            "PushReel MediaCodec video output currently supports SDR only"
+        }
+        val output = PushReelMediaCodecVideoOutput(
+            createPushReelMediaSpec(videoQuality, targetFrameRate)
+        )
+        val capture = VideoCapture.Builder(output).apply {
+            setResolutionSelector(
+                createPushReelResolutionSelector(
+                    cameraInfo.sensorLandscapeRatio,
+                    aspectRatio,
+                    videoQuality
+                )
+            )
+            setBackgroundExecutor(backgroundDispatcher.asExecutor())
+            if (stabilizationMode == StabilizationMode.HIGH_QUALITY) {
+                setVideoStabilizationEnabled(true)
+            }
+            if (targetFrameRate != TARGET_FPS_AUTO) {
+                setTargetFrameRate(Range(targetFrameRate, targetFrameRate))
+            }
+            setDynamicRange(androidx.camera.core.DynamicRange.SDR)
+        }.build()
+        SessionVideoUseCase(capture = capture, mediaCodecOutput = output)
+    }
+}
+
 private fun getAspectRatioForUseCase(sensorLandscapeRatio: Float, aspectRatio: AspectRatio): Int =
     when (aspectRatio) {
         AspectRatio.THREE_FOUR -> androidx.camera.core.AspectRatio.RATIO_4_3
@@ -837,23 +958,29 @@ private fun getResolutionSelector(
     sensorLandscapeRatio: Float,
     aspectRatio: AspectRatio
 ): ResolutionSelector {
-    val aspectRatioStrategy = when (aspectRatio) {
-        AspectRatio.THREE_FOUR -> AspectRatioStrategy.RATIO_4_3_FALLBACK_AUTO_STRATEGY
-        AspectRatio.NINE_SIXTEEN -> AspectRatioStrategy.RATIO_16_9_FALLBACK_AUTO_STRATEGY
-        else -> {
-            // Choose the resolution selector strategy which maximizes FOV by being closest
-            // to the sensor aspect ratio
-            if (
-                abs(sensorLandscapeRatio - AspectRatio.NINE_SIXTEEN.toLandscapeFloat()) <
-                abs(sensorLandscapeRatio - AspectRatio.THREE_FOUR.toLandscapeFloat())
-            ) {
-                AspectRatioStrategy.RATIO_16_9_FALLBACK_AUTO_STRATEGY
-            } else {
-                AspectRatioStrategy.RATIO_4_3_FALLBACK_AUTO_STRATEGY
-            }
+    return ResolutionSelector.Builder()
+        .setAspectRatioStrategy(createAspectRatioStrategy(sensorLandscapeRatio, aspectRatio))
+        .build()
+}
+
+private fun createAspectRatioStrategy(
+    sensorLandscapeRatio: Float,
+    aspectRatio: AspectRatio
+): AspectRatioStrategy = when (aspectRatio) {
+    AspectRatio.THREE_FOUR -> AspectRatioStrategy.RATIO_4_3_FALLBACK_AUTO_STRATEGY
+    AspectRatio.NINE_SIXTEEN -> AspectRatioStrategy.RATIO_16_9_FALLBACK_AUTO_STRATEGY
+    else -> {
+        // Choose the resolution selector strategy which maximizes FOV by being closest
+        // to the sensor aspect ratio
+        if (
+            abs(sensorLandscapeRatio - AspectRatio.NINE_SIXTEEN.toLandscapeFloat()) <
+            abs(sensorLandscapeRatio - AspectRatio.THREE_FOUR.toLandscapeFloat())
+        ) {
+            AspectRatioStrategy.RATIO_16_9_FALLBACK_AUTO_STRATEGY
+        } else {
+            AspectRatioStrategy.RATIO_4_3_FALLBACK_AUTO_STRATEGY
         }
     }
-    return ResolutionSelector.Builder().setAspectRatioStrategy(aspectRatioStrategy).build()
 }
 
 context(CameraSessionContext)

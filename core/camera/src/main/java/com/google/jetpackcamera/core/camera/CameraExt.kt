@@ -224,7 +224,7 @@ val CameraInfo.supportedImageFormats: Set<ImageOutputFormat>
         .mapNotNull(Int::toAppImageFormat)
         .toSet()
 
-fun UseCaseGroup.getVideoCapture() = getUseCaseOrNull<VideoCapture<Recorder>>()
+fun UseCaseGroup.getVideoCapture() = getUseCaseOrNull<VideoCapture<*>>()
 fun UseCaseGroup.getImageCapture() = getUseCaseOrNull<ImageCapture>()
 
 private inline fun <reified T : UseCase> UseCaseGroup.getUseCaseOrNull(): T? {

@@ -44,18 +44,25 @@ bind acknowledgement; stale acknowledgements, cancellation, and bind failures ca
 release a newer request. The Recorder path also validates the captured audio plan and
 accepts only the default camera audio source.
 
-The inherited CameraX Recorder remains the only implemented recording backend. The
-reserved PushReel MediaCodec backend identity now provides the safe pre-bind extension
-point for the next slice, but channel selection does not feed external PCM into an
-encoder yet and Push 3 audio is not written to video at this stage. When Link is
-disabled, the existing camera audio behavior is preserved.
+The PushReel MediaCodec video backend is now implemented as a CameraX custom
+`VideoOutput`. It negotiates the selected resolution explicitly, configures an SDR AVC
+surface encoder, continuously drains encoded output, and keeps every CameraX surface
+generation tied atomically to the exact recording-backend session token. Replacement,
+cancellation, codec failure, and release cannot leave the coordinator ready for an
+unusable surface. Encoded frame, keyframe, codec-config, PTS, transformation, and release
+diagnostics are available for the next recording slice.
+
+The custom backend currently drains and discards H.264 samples because AAC and MP4
+muxing are not implemented yet. The inherited CameraX Recorder therefore remains the
+only user-facing recording backend. Channel selection does not feed external PCM into an
+encoder yet and Push 3 audio is not written to video. When Link is disabled, the existing
+camera audio behavior is preserved.
 
 ## Next implementation slice
 
-Implement the `PUSHREEL_MEDIA_CODEC` backend as a CameraX custom `VideoOutput`, configure
-hardware H.264 encoding, and keep its surface lifecycle tied to the acknowledged camera
-session. Then add AAC encoding from the captured Link Audio PCM plan and feed both
-encoded tracks into a coordinated muxer.
+Add AAC-LC encoding from the captured Link Audio PCM plan, retain the H.264 samples from
+the custom backend, and feed both tracks into a coordinated MediaMuxer using the shared
+Android monotonic timebase. Then publish completed MP4 files through MediaStore.
 
 AAC encoding, a shared audio/video timebase, custom recording coordination, and MP4
 muxing remain future work. The existing CameraX Recorder is not an external PCM input
@@ -63,7 +70,7 @@ path.
 
 ## Verification
 
-Verified through 2026-09-21:
+Verified through 2026-09-22:
 
 - `:app:assembleStableDebug` completed successfully.
 - The project Spotless checks completed successfully against `upstream/main`.
@@ -87,6 +94,14 @@ Verified through 2026-09-21:
 - Camera backend coordinator tests cover backend generations, concrete bind
   incarnations, stale acknowledgement/end rejection, bind failure, cancellation, and
   the ordering required when an inner CameraX rebind replaces an already-ready bind.
+- Custom video-output unit tests cover AVC configuration, explicit quality-to-resolution
+  selection, per-surface generation outcomes, synchronous backend readiness transitions,
+  stale session isolation, cancellation/failure/release handling, codec-config filtering,
+  frame/keyframe diagnostics, and monotonic frame PTS accounting.
+- A targeted instrumentation test passed on the physical Samsung SM-S911B: two CameraX
+  bind/unbind generations each negotiated 1920 x 1080 SDR, produced AVC output format,
+  at least five encoded frames and a keyframe with strictly increasing frame PTS, and
+  released the codec surface without errors.
 - The host PCM FIFO test covers descriptor boundaries, overflow/underrun counters,
   sample-rate changes, timing metadata, monotonic clock mapping, partial-read timestamp
   offsets, anchor-cache reuse/reset, bracket rejection, and unsigned ring-position
