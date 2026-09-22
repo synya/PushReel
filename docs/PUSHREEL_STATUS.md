@@ -30,11 +30,9 @@ data, a temporary underrun, source invalidation, invalid timing, and a read fail
 Each valid read now carries the first PCM frame's timestamp in Android's monotonic
 `elapsedRealtime` timebase. Native code derives one anchor from the exact Link buffer
 descriptor, converts `CLOCK_MONOTONIC_RAW` to `CLOCK_BOOTTIME` with a bounded clock
-sampling bracket, and advances partial reads by frame offset and sample rate. Until the
-external AAC/backend path is implemented, any recording request made with Link enabled is
-rejected with a visible capture error before CameraX starts. This prevents both a ready
-and a temporarily unavailable Link source from silently falling back to the phone
-microphone.
+sampling bracket, and advances partial reads by frame offset and sample rate. Ready and
+temporarily unavailable Link recording requests are still rejected explicitly and never
+fall back to the phone microphone while custom finalization is validated on-device.
 
 Recording backend selection is now part of the camera session configuration rather than
 a decision made after CameraX has already bound its use cases. Each concrete CameraX
@@ -50,23 +48,27 @@ surface encoder, continuously drains encoded output, and keeps every CameraX sur
 generation tied atomically to the exact recording-backend session token. Replacement,
 cancellation, codec failure, and release cannot leave the coordinator ready for an
 unusable surface. Encoded frame, keyframe, codec-config, PTS, transformation, and release
-diagnostics are available for the next recording slice.
+diagnostics are available to the recording coordinator. During a recording it copies
+encoded samples into a bounded queue and requests a fresh keyframe.
 
-The custom backend currently drains and discards H.264 samples because AAC and MP4
-muxing are not implemented yet. The inherited CameraX Recorder therefore remains the
-only user-facing recording backend. Channel selection does not feed external PCM into an
-encoder yet and Push 3 audio is not written to video. When Link is disabled, the existing
-camera audio behavior is preserved.
+The guarded custom backend can encode stereo Link PCM as AAC-LC, maps audio and video from one
+`elapsedRealtime` origin, and writes both tracks through one MediaMuxer owner. Muxing
+waits for both encoder formats and the first retained AVC keyframe, enforces monotonic
+per-track timestamps, and uses bounded queues with explicit overflow failure. Default
+output creates a pending MediaStore item, commits it after successful finalization, and
+deletes it on failure. Explicit and cache destinations, pause/resume, unavailable Link
+sources, non-stereo input, and Android versions below 10 are rejected explicitly. The
+continuous video encoder uses a tested stop-cutoff callback barrier and does not receive
+EOS because CameraX must keep its input surface alive. Production Link recording remains
+guarded until that tail behavior and the resulting MP4 are verified on the physical
+phone. The inherited CameraX Recorder path remains unchanged when Link is disabled.
 
 ## Next implementation slice
 
-Add AAC-LC encoding from the captured Link Audio PCM plan, retain the H.264 samples from
-the custom backend, and feed both tracks into a coordinated MediaMuxer using the shared
-Android monotonic timebase. Then publish completed MP4 files through MediaStore.
-
-AAC encoding, a shared audio/video timebase, custom recording coordination, and MP4
-muxing remain future work. The existing CameraX Recorder is not an external PCM input
-path.
+Add a targeted device harness for the guarded AAC/muxer session, verify the stop-cutoff
+barrier and complete MP4 against the Push 3, and only then remove the production guard.
+Record several minutes, inspect AAC/AVC stream metadata and A/V offset, confirm Gallery
+playback, then harden disconnect and lifecycle failure behavior from device results.
 
 ## Verification
 
@@ -88,9 +90,13 @@ Verified through 2026-09-22:
 - `:feature:preview:testStableDebugUnitTest` completed successfully with channel
   selection, stale-diagnostic, visual-state, recording-plan, reader-invalidation, and
   cancellation coverage.
-- Recording controller tests verify that both ready and unavailable Link sources block
-  recording before `CameraSystem` is called, while the default camera source still starts
-  the inherited recording path.
+- Recording controller tests verify that a ready Link source reaches `CameraSystem`, an
+  unavailable Link source is rejected, and the default camera source still starts the
+  inherited recording path. `CameraSystem` retains the final ready-Link production guard.
+- Custom recording unit tests cover PCM trimming against the shared origin, monotonic
+  track timestamps, keyframe retention before AAC format, audio before the first
+  keyframe, bounded pre-start overflow, stop-cutoff acknowledgement, and mandatory
+  orientation readiness.
 - Camera backend coordinator tests cover backend generations, concrete bind
   incarnations, stale acknowledgement/end rejection, bind failure, cancellation, and
   the ordering required when an inner CameraX rebind replaces an already-ready bind.
@@ -128,8 +134,9 @@ Verified through 2026-09-22:
   physical phone, showed the camera preview and the accessible Link Audio status
   control, and remained running without a startup crash.
 
-Still to verify manually: Link lifecycle across background/foreground transitions,
-Gallery playback over longer recordings, and all future external-audio behavior.
+Still to verify manually: the new Link Audio AAC/AVC MP4 path on a physical phone, Link
+lifecycle across background/foreground transitions, A/V synchronization over longer
+recordings, and Gallery playback after custom finalization.
 
 On the tested Samsung phone, use `./scripts/install-debug-owner.ps1` for deployment
 to its main profile (`userId 0`). It passes `--user 0` to ADB and verifies that no

@@ -34,6 +34,7 @@ import androidx.camera.core.impl.Timebase
 import androidx.camera.video.MediaSpec
 import androidx.camera.video.VideoOutput
 import java.io.Closeable
+import java.nio.ByteBuffer
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.Executor
 import java.util.concurrent.ExecutorService
@@ -462,7 +463,54 @@ internal data class MediaCodecVideoDiagnostics(
     val error: String? = null
 )
 
-/** H.264 readiness backend. Encoded buffers are drained and discarded until muxing is added. */
+internal data class EncodedVideoSample(
+    val data: ByteArray,
+    val presentationTimeUs: Long,
+    val flags: Int
+) {
+    val isKeyFrame: Boolean
+        get() = flags and MediaCodec.BUFFER_FLAG_KEY_FRAME != 0
+}
+
+internal interface EncodedVideoConsumer {
+    fun onVideoFormat(format: MediaFormat)
+
+    fun onVideoSample(sample: EncodedVideoSample)
+
+    fun onVideoError(error: Throwable)
+}
+
+internal data class RecordingVideoSnapshot(
+    val generation: Long,
+    val timebase: Timebase,
+    val rotationDegrees: Int
+)
+
+internal fun recordingVideoSnapshot(
+    diagnostics: MediaCodecVideoDiagnostics
+): RecordingVideoSnapshot {
+    check(diagnostics.state == VideoSurfaceState.READY) { "Video output is not ready" }
+    return RecordingVideoSnapshot(
+        generation = diagnostics.generation,
+        timebase = checkNotNull(diagnostics.timebase) { "Video timebase is unavailable" },
+        rotationDegrees = checkNotNull(diagnostics.rotationDegrees) {
+            "Video orientation is not ready"
+        }
+    )
+}
+
+internal class EncodedVideoAttachment(
+    val snapshot: RecordingVideoSnapshot,
+    private val closeAction: () -> Unit
+) : Closeable {
+    private val closed = AtomicBoolean(false)
+
+    override fun close() {
+        if (closed.compareAndSet(false, true)) closeAction()
+    }
+}
+
+/** H.264 backend whose encoded output can be attached to one recording session at a time. */
 @SuppressLint("RestrictedApi")
 internal class PushReelMediaCodecVideoOutput(
     private val mediaSpec: MediaSpec,
@@ -479,7 +527,13 @@ internal class PushReelMediaCodecVideoOutput(
         var encodedFrameCount: Long = 0,
         var keyFrameCount: Long = 0,
         var codecConfigBufferCount: Long = 0,
+        @Volatile var outputFormat: MediaFormat? = null,
         var surface: Surface? = null
+    )
+
+    private data class ConsumerRegistration(
+        val generation: Long,
+        val consumer: EncodedVideoConsumer
     )
 
     private val closed = AtomicBoolean(false)
@@ -490,6 +544,8 @@ internal class PushReelMediaCodecVideoOutput(
     private val callbackThread = HandlerThread("PushReelVideoCallbacks").apply { start() }
     private val callbackHandler = Handler(callbackThread.looper)
     private val _diagnostics = MutableStateFlow(MediaCodecVideoDiagnostics())
+    private val activeCodecs = ConcurrentHashMap<Long, OwnedCodec>()
+    private var consumerRegistration: ConsumerRegistration? = null
 
     // The future recording owner will collect this flow and turn a post-bind FAILED state into a
     // recording state-machine error. This readiness slice has no production recording owner yet.
@@ -512,6 +568,46 @@ internal class PushReelMediaCodecVideoOutput(
         sessionToken: RecordingBackendSessionToken,
         coordinator: RecordingBackendSessionCoordinator
     ): Long = lifecycle.awaitReadyAndAttach(marker, sessionToken, coordinator)
+
+    fun attachEncodedConsumer(consumer: EncodedVideoConsumer): EncodedVideoAttachment {
+        val generation: Long
+        val owned: OwnedCodec
+        val snapshot: RecordingVideoSnapshot
+        synchronized(stateLock) {
+            check(!closed.get()) { "Video output is closed" }
+            val lifecycleSnapshot = lifecycle.snapshot.value
+            check(lifecycleSnapshot.state == VideoSurfaceState.READY) {
+                "Video output is not ready"
+            }
+            check(consumerRegistration == null) { "A video recording is already attached" }
+            generation = lifecycleSnapshot.generation
+            owned = checkNotNull(activeCodecs[generation]) { "Ready video codec is unavailable" }
+            snapshot = recordingVideoSnapshot(_diagnostics.value)
+            check(snapshot.generation == generation) { "Video diagnostics generation is stale" }
+            consumerRegistration = ConsumerRegistration(generation, consumer)
+        }
+        owned.outputFormat?.let { format -> runCatching { consumer.onVideoFormat(format) } }
+        controlExecutor.execute {
+            synchronized(owned.codecLock) {
+                if (!owned.released.get()) {
+                    runCatching {
+                        owned.codec.setParameters(
+                            android.os.Bundle().apply {
+                                putInt(MediaCodec.PARAMETER_KEY_REQUEST_SYNC_FRAME, 0)
+                            }
+                        )
+                    }.onFailure(consumer::onVideoError)
+                }
+            }
+        }
+        return EncodedVideoAttachment(snapshot) {
+            synchronized(stateLock) {
+                consumerRegistration?.takeIf {
+                    it.generation == generation && it.consumer === consumer
+                }?.let { consumerRegistration = null }
+            }
+        }
+    }
 
     override fun onSurfaceRequested(request: SurfaceRequest) {
         onSurfaceRequested(request, Timebase.REALTIME, false)
@@ -591,6 +687,7 @@ internal class PushReelMediaCodecVideoOutput(
             )
             currentOwned.surface = currentOwned.codec.createInputSurface()
             currentOwned.codec.start()
+            activeCodecs[generation] = currentOwned
             if (!lifecycle.isCurrentNonTerminal(generation)) throw TerminalSurfaceException()
 
             request.setTransformationInfoListener(controlExecutor) { info ->
@@ -646,12 +743,18 @@ internal class PushReelMediaCodecVideoOutput(
                 info: MediaCodec.BufferInfo
             ) {
                 val classification = classifyEncodedVideoBuffer(info.size, info.flags)
+                var encodedSample: EncodedVideoSample? = null
                 synchronized(owned.codecLock) {
                     if (owned.released.get()) return
                     if (classification.isFrame) {
                         owned.ptsTracker.observe(info.presentationTimeUs)
                         owned.encodedFrameCount++
                         if (classification.isKeyFrame) owned.keyFrameCount++
+                        codec.getOutputBuffer(index)?.let { source ->
+                            encodedSample = source.copyEncodedBytes(info)?.let { bytes ->
+                                EncodedVideoSample(bytes, info.presentationTimeUs, info.flags)
+                            }
+                        }
                     }
                     if (classification.isCodecConfig) owned.codecConfigBufferCount++
                     runCatching { codec.releaseOutputBuffer(index, false) }
@@ -662,6 +765,12 @@ internal class PushReelMediaCodecVideoOutput(
                                 "Output release: ${it.message}"
                             )
                         }
+                }
+                encodedSample?.let { sample ->
+                    currentConsumer(generation)?.let { consumer ->
+                        runCatching { consumer.onVideoSample(sample) }
+                            .onFailure(consumer::onVideoError)
+                    }
                 }
                 updateDiagnostics(generation) {
                     copy(
@@ -676,10 +785,18 @@ internal class PushReelMediaCodecVideoOutput(
             }
 
             override fun onOutputFormatChanged(codec: MediaCodec, format: MediaFormat) {
+                owned.outputFormat = format
+                currentConsumer(generation)?.let { consumer ->
+                    runCatching { consumer.onVideoFormat(format) }
+                        .onFailure(consumer::onVideoError)
+                }
                 updateDiagnostics(generation) { copy(outputFormat = format.toString()) }
             }
 
             override fun onError(codec: MediaCodec, exception: MediaCodec.CodecException) {
+                currentConsumer(generation)?.let { consumer ->
+                    runCatching { consumer.onVideoError(exception) }
+                }
                 failGeneration(
                     generation,
                     request,
@@ -717,6 +834,14 @@ internal class PushReelMediaCodecVideoOutput(
             }
         }
         activeRequests.remove(generation)
+        activeCodecs.remove(generation, owned)
+        currentConsumer(generation)?.let { consumer ->
+            runCatching {
+                consumer.onVideoError(
+                    IllegalStateException("Video surface was released during recording")
+                )
+            }
+        }
         lifecycle.release(generation)
         updateDiagnostics(generation) {
             copy(
@@ -735,6 +860,7 @@ internal class PushReelMediaCodecVideoOutput(
 
     private fun releaseOwnedCodec(owned: OwnedCodec?, generation: Long) {
         if (owned == null) return
+        activeCodecs.remove(generation, owned)
         val releaseError = synchronized(owned.codecLock) {
             if (owned.released.compareAndSet(false, true)) {
                 releaseCodec(owned.codec, owned.surface, generation)
@@ -781,6 +907,10 @@ internal class PushReelMediaCodecVideoOutput(
         }
     }
 
+    private fun currentConsumer(generation: Long): EncodedVideoConsumer? = synchronized(stateLock) {
+        consumerRegistration?.takeIf { it.generation == generation }?.consumer
+    }
+
     override fun close() {
         synchronized(stateLock) {
             if (!closed.compareAndSet(false, true)) return
@@ -803,4 +933,12 @@ internal class PushReelMediaCodecVideoOutput(
     private companion object {
         val DIRECT_EXECUTOR = Executor(Runnable::run)
     }
+}
+
+private fun ByteBuffer.copyEncodedBytes(info: MediaCodec.BufferInfo): ByteArray? {
+    if (info.size <= 0) return null
+    val duplicate = duplicate()
+    duplicate.position(info.offset)
+    duplicate.limit(info.offset + info.size)
+    return ByteArray(info.size).also(duplicate::get)
 }

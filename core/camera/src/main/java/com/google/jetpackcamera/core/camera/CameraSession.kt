@@ -83,6 +83,7 @@ import com.google.jetpackcamera.model.ImageOutputFormat
 import com.google.jetpackcamera.model.LensFacing
 import com.google.jetpackcamera.model.LowLightBoostState
 import com.google.jetpackcamera.model.RecordingAudioPlan
+import com.google.jetpackcamera.model.RecordingAudioSource
 import com.google.jetpackcamera.model.SaveLocation
 import com.google.jetpackcamera.model.StabilizationMode
 import com.google.jetpackcamera.model.TARGET_FPS_AUTO
@@ -106,9 +107,11 @@ import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.asExecutor
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -121,6 +124,7 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.onCompletion
 import kotlinx.coroutines.flow.transform
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
 private const val TAG = "CameraSession"
@@ -184,6 +188,7 @@ internal suspend fun runSingleCameraSession(
             }
         }
         videoUseCase?.mediaCodecOutput?.let { output ->
+            launch { processPushReelVideoControlEvents(output) }
             currentCoroutineContext()[Job]?.invokeOnCompletion { output.close() }
         }
 
@@ -1442,6 +1447,98 @@ internal suspend fun processVideoControlEvents(
         }
     }
 }
+
+context(CameraSessionContext)
+internal suspend fun processPushReelVideoControlEvents(videoOutput: PushReelMediaCodecVideoOutput) =
+    coroutineScope {
+        for (event in videoCaptureControlEvents) {
+            if (event !is VideoCaptureControlEvent.StartRecordingEvent) continue
+            val callbackDelivered = atomic(false)
+            fun deliver(result: OnVideoRecordEvent) {
+                if (callbackDelivered.compareAndSet(false, true)) {
+                    runCatching { event.onVideoRecord(result) }
+                        .onFailure { Log.e(TAG, "PushReel recording callback failed", it) }
+                }
+            }
+            val source = event.audioPlan.source
+            try {
+                require(event.saveLocation is SaveLocation.Default) {
+                    "Link Audio recording currently supports only the default MediaStore location"
+                }
+                require(source is RecordingAudioSource.LinkAudioReady) {
+                    "PushReel recording requires a ready Link Audio source"
+                }
+                val initialSettings = transientSettings.filterNotNull().first()
+                currentCameraState.update { old ->
+                    old.copy(
+                        videoRecordingState = VideoRecordingState.Starting(
+                            InitialRecordingSettings(
+                                isAudioEnabled = true,
+                                lensFacing = initialSettings.primaryLensFacing,
+                                zoomRatios = initialSettings.zoomRatios
+                            )
+                        )
+                    )
+                }
+                val startedNanos = SystemClock.elapsedRealtimeNanos()
+                currentCameraState.update { old ->
+                    old.copy(
+                        videoRecordingState = VideoRecordingState.Active.Recording(
+                            maxDurationMillis = event.maxVideoDuration,
+                            audioStreamState = AudioStreamState.Active(0.0),
+                            elapsedTimeNanos = 0
+                        )
+                    )
+                }
+                val statusJob = launch {
+                    while (isActive) {
+                        delay(250)
+                        val elapsedNanos = SystemClock.elapsedRealtimeNanos() - startedNanos
+                        currentCameraState.update { old ->
+                            old.copy(
+                                videoRecordingState = VideoRecordingState.Active.Recording(
+                                    maxDurationMillis = event.maxVideoDuration,
+                                    audioStreamState = AudioStreamState.Active(0.0),
+                                    elapsedTimeNanos = elapsedNanos
+                                )
+                            )
+                        }
+                    }
+                }
+                val savedUri = try {
+                    PushReelRecordingSession(
+                        context = context,
+                        filePathGenerator = filePathGenerator,
+                        videoOutput = videoOutput,
+                        audioSource = source,
+                        dispatcher = backgroundDispatcher
+                    ).recordUntilStopped(videoCaptureControlEvents, event.maxVideoDuration)
+                } finally {
+                    statusJob.cancelAndJoin()
+                }
+                val elapsedNanos = SystemClock.elapsedRealtimeNanos() - startedNanos
+                currentCameraState.update { old ->
+                    old.copy(
+                        videoRecordingState = VideoRecordingState.Inactive(
+                            finalElapsedTimeNanos = elapsedNanos
+                        )
+                    )
+                }
+                deliver(OnVideoRecordEvent.OnVideoRecorded(savedUri))
+            } catch (error: CancellationException) {
+                currentCameraState.update { old ->
+                    old.copy(videoRecordingState = VideoRecordingState.Inactive())
+                }
+                deliver(OnVideoRecordEvent.OnVideoRecordError(error))
+                throw error
+            } catch (error: Throwable) {
+                currentCameraState.update { old ->
+                    old.copy(videoRecordingState = VideoRecordingState.Inactive())
+                }
+                deliver(OnVideoRecordEvent.OnVideoRecordError(error))
+            }
+        }
+    }
 
 /**
  * Applies a CaptureCallback to the provided image capture builder

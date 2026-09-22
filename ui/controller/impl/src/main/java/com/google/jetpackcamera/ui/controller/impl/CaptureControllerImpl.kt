@@ -36,6 +36,7 @@ import com.google.jetpackcamera.ui.controller.impl.Utils.nextSaveLocation
 import com.google.jetpackcamera.ui.uistate.capture.TrackedCaptureUiState
 import kotlin.coroutines.CoroutineContext
 import kotlinx.atomicfu.atomic
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.cancel
@@ -148,8 +149,7 @@ class CaptureControllerImpl(
             RecordingAudioSource.CameraDefault -> null
             is RecordingAudioSource.LinkAudioUnavailable ->
                 "Link Audio is not ready: ${source.reason.name}"
-            is RecordingAudioSource.LinkAudioReady ->
-                "external Link recording backend not available"
+            is RecordingAudioSource.LinkAudioReady -> null
         }
         if (linkAudioError != null) {
             captureEvents.trySend(
@@ -192,8 +192,11 @@ class CaptureControllerImpl(
                     }
                 }
                 Log.d(TAG, "cameraSystem.startRecording success")
-            } catch (exception: IllegalStateException) {
+            } catch (exception: CancellationException) {
+                throw exception
+            } catch (exception: Exception) {
                 Log.d(TAG, "cameraSystem.startVideoRecording error", exception)
+                captureEvents.trySend(VideoCaptureEvent.VideoCaptureError(exception))
             }
         }
     }

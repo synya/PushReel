@@ -296,7 +296,7 @@ class CaptureControllerImplTest {
     }
 
     @Test
-    fun startVideoRecordingRejectsReadyLinkBeforeCameraCall() = runCameraTest {
+    fun startVideoRecordingPassesReadyLinkToCameraSystem() = runCameraTest {
         val linkPlan = RecordingAudioPlan(
             RecordingAudioSource.LinkAudioReady(
                 channelId = "main",
@@ -314,11 +314,8 @@ class CaptureControllerImplTest {
         controller.startVideoRecording()
         advanceUntilIdle()
 
-        assertThat(fakeCameraSystem.numVideoRecordingStarts).isEqualTo(0)
-        val event = captureEvents.receive() as VideoCaptureEvent.VideoCaptureError
-        assertThat(event.error).hasMessageThat().contains(
-            "external Link recording backend not available"
-        )
+        assertThat(fakeCameraSystem.numVideoRecordingStarts).isEqualTo(1)
+        assertThat(testCameraSystem.lastRecordingAudioPlan).isEqualTo(linkPlan)
     }
 
     @Test

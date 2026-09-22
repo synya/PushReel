@@ -682,14 +682,22 @@ class CameraXCameraSystem(
         audioPlan: RecordingAudioPlan,
         onVideoRecord: (OnVideoRecordEvent) -> Unit
     ) {
-        val requiredBackend = when (audioPlan.source) {
+        val requiredBackend = when (val audioSource = audioPlan.source) {
             RecordingAudioSource.CameraDefault -> RecordingBackendIdentity.CAMERA_X_RECORDER
-            is RecordingAudioSource.LinkAudioReady,
-            is RecordingAudioSource.LinkAudioUnavailable ->
-                RecordingBackendIdentity.PUSHREEL_MEDIA_CODEC
-        }
-        require(requiredBackend == RecordingBackendIdentity.CAMERA_X_RECORDER) {
-            "The PushReel MediaCodec recording backend is not available yet"
+            is RecordingAudioSource.LinkAudioReady -> {
+                require(saveLocation is SaveLocation.Default) {
+                    "Link Audio recording currently supports only the default MediaStore location"
+                }
+                require(Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                    "Link Audio recording requires Android 10 or newer"
+                }
+                throw IllegalStateException(
+                    "Link Audio MP4 recording is awaiting physical-device tail-flush validation"
+                )
+            }
+            is RecordingAudioSource.LinkAudioUnavailable -> throw IllegalStateException(
+                "Link Audio is unavailable: ${audioSource.reason}"
+            )
         }
         val requestedBinding = recordingBackendCoordinator.request(requiredBackend)
         recordingBackendCoordinator.awaitBound(requestedBinding)
