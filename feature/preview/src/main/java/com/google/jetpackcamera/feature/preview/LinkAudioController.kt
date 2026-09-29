@@ -27,6 +27,7 @@ import com.pushreel.linkaudio.LinkAudioChannel
 import com.pushreel.linkaudio.LinkAudioClient
 import com.pushreel.linkaudio.LinkAudioPcmRead
 import com.pushreel.linkaudio.LinkAudioPcmStatus
+import com.pushreel.linkaudio.LinkAudioPeakLevels
 import com.pushreel.linkaudio.LinkAudioStatus
 import dagger.Binds
 import dagger.Module
@@ -50,6 +51,7 @@ data class LinkAudioUiState(
     val channels: List<LinkAudioChannel> = emptyList(),
     val selectedChannelId: String? = null,
     val pcmStatus: LinkAudioPcmStatus = LinkAudioPcmStatus(),
+    val peakLevels: LinkAudioPeakLevels = LinkAudioPeakLevels(),
     val error: String? = null
 )
 
@@ -77,12 +79,11 @@ class DefaultLinkAudioController internal constructor(
     private var lifecycleStarted = false
 
     override fun uiState(scope: CoroutineScope): StateFlow<LinkAudioUiState> = combine(
-        client.status,
-        client.pcmStatus,
+        combine(client.status, client.pcmStatus, client.peakLevels, ::Triple),
         requestedEnabled,
         selectedChannelId,
         selectionError
-    ) { status, pcmStatus, requested, selected, selectionError ->
+    ) { (status, pcmStatus, peakLevels), requested, selected, selectionError ->
         val selectedChannelDisappeared = requested &&
             status.linkAudioEnabled &&
             selected != null &&
@@ -95,6 +96,7 @@ class DefaultLinkAudioController internal constructor(
             requestedEnabled = requested,
             selectedChannelId = selected,
             pcmStatus = pcmStatus,
+            peakLevels = peakLevels,
             selectionError = selectionError
         )
     }.stateIn(
@@ -212,6 +214,7 @@ class DefaultLinkAudioController internal constructor(
 internal interface LinkAudioClientFacade : Closeable {
     val status: StateFlow<LinkAudioStatus>
     val pcmStatus: StateFlow<LinkAudioPcmStatus>
+    val peakLevels: StateFlow<LinkAudioPeakLevels>
     fun setEnabled(enabled: Boolean)
     fun selectChannel(channelId: String?)
     suspend fun discardBufferedPcmFrames(): Long
@@ -223,6 +226,7 @@ private class AndroidLinkAudioClient(
 ) : LinkAudioClientFacade {
     override val status: StateFlow<LinkAudioStatus> = client.status
     override val pcmStatus: StateFlow<LinkAudioPcmStatus> = client.pcmStatus
+    override val peakLevels: StateFlow<LinkAudioPeakLevels> = client.peakLevels
     override fun setEnabled(enabled: Boolean) = client.setEnabled(enabled)
     override fun selectChannel(channelId: String?) = client.selectChannel(channelId)
     override suspend fun discardBufferedPcmFrames(): Long = client.discardBufferedPcmFrames()
@@ -277,6 +281,7 @@ internal fun LinkAudioStatus.toUiState(
     requestedEnabled: Boolean,
     selectedChannelId: String?,
     pcmStatus: LinkAudioPcmStatus = LinkAudioPcmStatus(),
+    peakLevels: LinkAudioPeakLevels = LinkAudioPeakLevels(),
     selectionError: String? = null
 ): LinkAudioUiState {
     val availableSelection = selectedChannelId?.takeIf { selected ->
@@ -292,6 +297,10 @@ internal fun LinkAudioStatus.toUiState(
         channels = channels,
         selectedChannelId = availableSelection,
         pcmStatus = matchingPcmStatus,
+        peakLevels = if (
+            requestedEnabled && linkEnabled && linkAudioEnabled &&
+            matchingPcmStatus.channelSelected && matchingPcmStatus.sampleRate > 0
+        ) peakLevels else LinkAudioPeakLevels(),
         error = error ?: selectionError
     )
 }

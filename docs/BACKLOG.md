@@ -1,7 +1,6 @@
 # PushReel backlog
 
-Last reviewed: 2026-09-29. This file records agreed product work; none of the items below
-has been implemented as part of this documentation update.
+Last reviewed: 2026-09-29. This file records agreed product work and its verification state.
 
 ## Working baseline and pending device evidence
 
@@ -28,6 +27,9 @@ has been implemented as part of this documentation update.
    layout and accessibility. Basic trustworthy levels come first; peak-hold and a
    full-scale warning are follow-up polish. A full-scale PCM sample is not proof of
    analog clipping. Verify that metering does not cause audio loss or new underruns.
+   **Status:** implemented in native/JNI/Kotlin/Compose; host and Android unit tests
+   and debug APK build passed. APK installed for Android `userId 0`; visual behavior
+   and recording regression test on the physical phone await user confirmation.
 
 2. **Remember the last Photo/Video mode.** Reuse the existing DataStore settings
    architecture. Persist the user's mode choice, restore it on relaunch, and keep the

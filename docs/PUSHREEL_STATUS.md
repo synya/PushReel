@@ -81,12 +81,14 @@ to the successful recording is not established.
 
 ## Next implementation slice
 
-The agreed priorities and acceptance criteria are in [BACKLOG.md](BACKLOG.md). The next
-usability work is a non-consuming stereo Link peak meter beside the Link control, followed
-by persistence of Photo/Video mode and screen-awake behavior during recording. Develop a
-new minimal adaptive icon and prepare a signed, quiet release build before distribution.
-Test mid-recording Link loss as a reliability task. No implementation of these newly
-agreed backlog items has started in this documentation update.
+The agreed priorities and acceptance criteria are in [BACKLOG.md](BACKLOG.md). The stereo
+Link peak meter has been implemented beside the Link control: native code samples L/R
+without consuming the recording FIFO, JNI exposes bounded windows, and Compose shows
+compact bars. Host and Android unit tests and the debug APK build passed; the APK was
+installed only for Android `userId 0`. The user's visual and recording check is pending.
+Next are persistence of Photo/Video mode and screen-awake behavior during recording.
+Develop a new minimal adaptive icon and prepare a signed, quiet release build before
+distribution. Test mid-recording Link loss as a reliability task.
 
 The user will measure A/V offset with Push 3 pad hits. If an offset is audible or
 visible, use that result to design a bounded correction for network/playout latency;

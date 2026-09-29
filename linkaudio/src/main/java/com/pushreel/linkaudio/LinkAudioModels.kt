@@ -67,6 +67,24 @@ data class LinkAudioPcmStatus(
     val timestampDiscontinuityCount: Long = 0
 )
 
+/** Peak sample magnitudes drained from a recent native stereo PCM window. */
+data class LinkAudioPeakLevels(
+    val leftPeakAbs: Int = 0,
+    val rightPeakAbs: Int = 0,
+    val framesObserved: Long = 0
+)
+
+internal fun decodePeakLevels(values: LongArray): LinkAudioPeakLevels {
+    require(values.size == 3) { "Native peak snapshot contains ${values.size} fields" }
+    val frames = values[2].coerceAtLeast(0)
+    if (frames == 0L) return LinkAudioPeakLevels()
+    return LinkAudioPeakLevels(
+        leftPeakAbs = values[0].coerceIn(0, 32_768).toInt(),
+        rightPeakAbs = values[1].coerceIn(0, 32_768).toInt(),
+        framesObserved = frames
+    )
+}
+
 /** Timing metadata copied from the Link buffer that supplied a PCM read. */
 data class LinkAudioBufferMetadata(
     val bufferCount: Long,

@@ -52,6 +52,55 @@ void testMonoAndTimingMetadata() {
   assert(status.underrunCount == 1);
 }
 
+void testPeakMeterStereoMonoAndWindowReset() {
+  TinyPcmFifo fifo;
+  const TinyPcmFifo::BufferMetadata sourceMetadata{};
+  const std::array<std::int16_t, 6> stereo{
+      1'000, -2'000, -32'768, 9'000, 11'000, 32'767};
+  fifo.push(stereo.data(), 3, 2, 48'000, sourceMetadata);
+  const std::array<std::int16_t, 2> mono{-7'000, 12'000};
+  fifo.push(mono.data(), 2, 1, 48'000, sourceMetadata);
+
+  auto levels = fifo.drainPeakLevels();
+  assert(levels.left == 32'768);
+  assert(levels.right == 32'767);
+  assert(levels.framesObserved == 5);
+  assert(fifo.drainPeakLevels().framesObserved == 0);
+
+  // Meter reads do not consume PCM, and PCM reads do not consume the meter window.
+  std::array<std::int16_t, 6> output{};
+  assert(fifo.read(output.data(), 3).frames == 3);
+  assert(output == stereo);
+  const std::array<std::int16_t, 2> nextMono{-32'768, 123};
+  fifo.push(nextMono.data(), 2, 1, 48'000, sourceMetadata);
+  levels = fifo.drainPeakLevels();
+  assert(levels.left == 32'768);
+  assert(levels.right == 32'768);
+  assert(levels.framesObserved == 2);
+  levels = fifo.drainPeakLevels();
+  assert(levels.left == 0 && levels.right == 0 && levels.framesObserved == 0);
+}
+
+void testPeakMeterIncludesDroppedPcmAndResetsWithSource() {
+  TinyPcmFifo fifo;
+  const TinyPcmFifo::BufferMetadata sourceMetadata{};
+  const std::array<std::int16_t, 16> full{};
+  fifo.push(full.data(), 8, 2, 48'000, sourceMetadata);
+  const std::array<std::int16_t, 2> clipped{-32'768, 32'767};
+  fifo.push(clipped.data(), 1, 2, 48'000, sourceMetadata);
+
+  const auto levels = fifo.drainPeakLevels();
+  assert(levels.left == 32'768);
+  assert(levels.right == 32'767);
+  assert(levels.framesObserved == 9);
+  assert(fifo.status().droppedFrames == 1);
+
+  // Channel selection constructs a fresh FIFO, so a new source has a clean meter window.
+  TinyPcmFifo replacement;
+  const auto reset = replacement.drainPeakLevels();
+  assert(reset.left == 0 && reset.right == 0 && reset.framesObserved == 0);
+}
+
 void testReadsDoNotCrossLinkBufferBoundaries() {
   auto fifo = std::make_unique<PcmFifo>();
   const std::array<std::int16_t, 4> first{10, 11, 12, 13};
@@ -342,6 +391,8 @@ void testFallbackTimingReanchorsSafelyOnDiscontinuity() {
 
 int main() {
   testMonoAndTimingMetadata();
+  testPeakMeterStereoMonoAndWindowReset();
+  testPeakMeterIncludesDroppedPcmAndResetsWithSource();
   testReadsDoNotCrossLinkBufferBoundaries();
   testOverflowDropsWholeNewestBuffer();
   testSampleRateChangeAndPhysicalWrap();

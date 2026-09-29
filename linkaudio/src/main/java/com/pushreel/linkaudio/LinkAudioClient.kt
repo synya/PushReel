@@ -60,6 +60,7 @@ class LinkAudioClient @JvmOverloads constructor(
 
     val status: StateFlow<LinkAudioStatus> = delegate.status
     val pcmStatus: StateFlow<LinkAudioPcmStatus> = delegate.pcmStatus
+    val peakLevels: StateFlow<LinkAudioPeakLevels> = delegate.peakLevels
 
     /** Queues enabling or disabling both Link and Link Audio discovery. */
     fun setEnabled(enabled: Boolean) = delegate.setEnabled(enabled)
@@ -109,11 +110,14 @@ internal class LinkAudioDelegate(
     // already queued reads with an empty result before releasing native resources.
     private val commands = Channel<ActorCommand>(capacity = COMMAND_CAPACITY)
     private val refreshQueued = AtomicBoolean(false)
+    private val peakQueued = AtomicBoolean(false)
     private val scope = CoroutineScope(SupervisorJob() + dispatcher.limitedParallelism(1))
     private val _status = MutableStateFlow(LinkAudioStatus())
     val status: StateFlow<LinkAudioStatus> = _status.asStateFlow()
     private val _pcmStatus = MutableStateFlow(LinkAudioPcmStatus())
     val pcmStatus: StateFlow<LinkAudioPcmStatus> = _pcmStatus.asStateFlow()
+    private val _peakLevels = MutableStateFlow(LinkAudioPeakLevels())
+    val peakLevels: StateFlow<LinkAudioPeakLevels> = _peakLevels.asStateFlow()
 
     // Requested generations are updated by non-blocking callers. The actor ignores superseded
     // commands and publishes PCM as ready only for the latest applied selection generation.
@@ -131,13 +135,25 @@ internal class LinkAudioDelegate(
             enqueueRefresh()
         }
     }
+    private val peakPollingJob: Job = scope.launch {
+        while (isActive) {
+            delay(PEAK_POLL_INTERVAL_MILLIS)
+            if (closed.get()) break
+            if (requestedEnabled.get().enabled && requestedSelection.get().channelId != null) {
+                enqueuePeakSnapshot()
+            }
+        }
+    }
 
     @Suppress("unused")
     private val actorJob: Job = scope.launch { runActor() }
 
     fun setEnabled(enabled: Boolean) {
         val request = EnabledRequest(enabled, controlGeneration.incrementAndGet())
-        requestedEnabled.set(request)
+        synchronized(selectionPublicationLock) {
+            requestedEnabled.set(request)
+            if (!enabled) _peakLevels.value = LinkAudioPeakLevels()
+        }
         enqueueControl(ActorCommand.SetEnabled(request), safetyCritical = !enabled)
     }
 
@@ -152,6 +168,7 @@ internal class LinkAudioDelegate(
             // Hide diagnostics synchronously. An older queued A selection must never make A ready
             // after the caller has requested B, clear, or even a new generation of A.
             _pcmStatus.value = LinkAudioPcmStatus()
+            _peakLevels.value = LinkAudioPeakLevels()
         }
         enqueueControl(ActorCommand.SelectChannel(request), safetyCritical = channelId == null)
     }
@@ -191,6 +208,7 @@ internal class LinkAudioDelegate(
     override fun close() {
         if (closed.compareAndSet(false, true)) {
             pollingJob.cancel()
+            peakPollingJob.cancel()
             commands.close()
         }
     }
@@ -230,6 +248,10 @@ internal class LinkAudioDelegate(
                         refreshQueued.set(false)
                         if (handle != null) refresh(handle)
                     }
+                    ActorCommand.PeakSnapshot -> {
+                        peakQueued.set(false)
+                        if (handle != null) updatePeakLevels(handle)
+                    }
                     is ActorCommand.SelectChannel -> if (
                         handle != null && command.request == requestedSelection.get()
                     ) {
@@ -249,6 +271,7 @@ internal class LinkAudioDelegate(
             }
         } finally {
             pollingJob.cancel()
+            peakPollingJob.cancel()
             closeNative(handle)
             commands.close()
             while (true) {
@@ -257,6 +280,7 @@ internal class LinkAudioDelegate(
             }
             _status.value = LinkAudioStatus(error = _status.value.error)
             _pcmStatus.value = LinkAudioPcmStatus()
+            _peakLevels.value = LinkAudioPeakLevels()
             closed.set(true)
             closedSignal.complete(Unit)
         }
@@ -400,6 +424,27 @@ internal class LinkAudioDelegate(
         }
     }
 
+    private fun updatePeakLevels(handle: Long) {
+        val enabled = requestedEnabled.get()
+        val selection = requestedSelection.get()
+        if (!enabled.enabled || selection.channelId == null ||
+            enabled.generation != appliedEnabledGeneration ||
+            selection.generation != appliedSelectionGeneration ||
+            selection.channelId != appliedChannelId
+        ) return
+        try {
+            val levels = decodePeakLevels(nativeBridge.getPeakLevels(handle))
+            synchronized(selectionPublicationLock) {
+                if (requestedEnabled.get() == enabled && requestedSelection.get() == selection) {
+                    _peakLevels.value = levels
+                }
+            }
+        } catch (error: Exception) {
+            _peakLevels.value = LinkAudioPeakLevels()
+            reportError(error)
+        }
+    }
+
     private fun closeNative(handle: Long?) {
         try {
             if (handle != null) nativeBridge.setEnabled(handle, false)
@@ -431,6 +476,11 @@ internal class LinkAudioDelegate(
         if (commands.trySend(ActorCommand.Refresh).isFailure) refreshQueued.set(false)
     }
 
+    private fun enqueuePeakSnapshot() {
+        if (closed.get() || !peakQueued.compareAndSet(false, true)) return
+        if (commands.trySend(ActorCommand.PeakSnapshot).isFailure) peakQueued.set(false)
+    }
+
     private fun enqueueControl(command: ActorCommand, safetyCritical: Boolean = false) {
         if (!closed.get() && commands.trySend(command).isFailure) {
             if (!safetyCritical) {
@@ -459,6 +509,7 @@ internal class LinkAudioDelegate(
     private sealed interface ActorCommand {
         data class SetEnabled(val request: EnabledRequest) : ActorCommand
         data object Refresh : ActorCommand
+        data object PeakSnapshot : ActorCommand
         data class SelectChannel(val request: SelectionRequest) : ActorCommand
         data class Read(
             val destination: ShortArray,
@@ -476,6 +527,7 @@ internal class LinkAudioDelegate(
     private companion object {
         const val STATUS_FIELD_COUNT = 3
         const val COMMAND_CAPACITY = 16
+        const val PEAK_POLL_INTERVAL_MILLIS = 50L
         val EMPTY_PCM_READ = LinkAudioPcmRead(framesRead = 0, metadata = null)
     }
 }

@@ -37,6 +37,8 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.BottomSheetScaffoldState
@@ -74,6 +76,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -142,6 +145,7 @@ import com.google.jetpackcamera.ui.uistate.capture.ZoomUiState
 import com.google.jetpackcamera.ui.uistate.capture.compound.CaptureUiState
 import kotlinx.coroutines.flow.transformWhile
 import kotlinx.coroutines.launch
+import kotlin.math.log10
 
 private const val TAG = "PreviewScreen"
 
@@ -925,7 +929,7 @@ private fun LayoutWrapper(
                 modifier = modifier
                     .fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                horizontalArrangement = Arrangement.spacedBy(4.dp)
             ) {
                 flashModeIndicator(Modifier)
                 hdrIndicator(Modifier)
@@ -965,13 +969,18 @@ private fun LinkAudioIndicator(
     val statusColor = visualState.color()
     val selectedChannel = uiState.channels.firstOrNull { it.id == uiState.selectedChannelId }
 
-    Box(modifier = modifier) {
+    Row(modifier = modifier, verticalAlignment = Alignment.CenterVertically) {
+        LinkPeakMeter(uiState)
+        Box {
         IconButton(
             onClick = { performIfEnabled(enabled) { expanded = true } },
             enabled = enabled,
             modifier = Modifier
                 .size(48.dp)
-                .semantics { contentDescription = visualState.contentDescription(uiState) }
+                .semantics {
+                    contentDescription = visualState.contentDescription(uiState) + ", " +
+                        uiState.peakDescription()
+                }
         ) {
             Box(
                 modifier = Modifier
@@ -1109,7 +1118,61 @@ private fun LinkAudioIndicator(
                 )
             }
         }
+        }
     }
+}
+
+@Composable
+private fun LinkPeakMeter(uiState: LinkAudioUiState) {
+    val ready = uiState.selectedChannelId != null && uiState.pcmStatus.channelSelected &&
+        uiState.pcmStatus.selectedChannelId == uiState.selectedChannelId &&
+        uiState.pcmStatus.sampleRate > 0 && uiState.linkEnabled && uiState.requestedEnabled
+    val track = Color.Black.copy(alpha = 0.56f)
+    val active = Color(0xFF58DB75)
+    Row(
+        modifier = Modifier
+            .width(18.dp)
+            .height(28.dp)
+            .clearAndSetSemantics { },
+        horizontalArrangement = Arrangement.spacedBy(3.dp),
+        verticalAlignment = Alignment.Bottom
+    ) {
+        listOf(uiState.peakLevels.leftPeakAbs, uiState.peakLevels.rightPeakAbs).forEach { peak ->
+            val fraction = if (ready) peak.toMeterFraction() else 0f
+            Box(
+                modifier = Modifier
+                    .width(6.dp)
+                    .height(28.dp)
+                    .background(track)
+            ) {
+                if (fraction > 0f) {
+                    Box(
+                        modifier = Modifier
+                            .align(Alignment.BottomCenter)
+                            .fillMaxWidth()
+                            .height((28f * fraction).dp)
+                            .background(active)
+                    )
+                }
+            }
+        }
+    }
+}
+
+private fun Int.toMeterFraction(): Float {
+    if (this <= 0) return 0f
+    val db = 20f * log10(this.toFloat() / 32_768f)
+    return ((db + 60f) / 60f).coerceIn(0.06f, 1f)
+}
+
+private fun LinkAudioUiState.peakDescription(): String {
+    if (!requestedEnabled || !linkEnabled || selectedChannelId == null ||
+        !pcmStatus.channelSelected || pcmStatus.selectedChannelId != selectedChannelId ||
+        pcmStatus.sampleRate <= 0
+    ) return "stereo level unavailable"
+    if (peakLevels.framesObserved == 0L) return "no recent audio samples"
+    if (peakLevels.leftPeakAbs == 0 && peakLevels.rightPeakAbs == 0) return "stereo signal silent"
+    return "stereo signal present"
 }
 
 internal inline fun performIfEnabled(enabled: Boolean, action: () -> Unit): Boolean {

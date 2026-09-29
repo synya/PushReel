@@ -579,6 +579,28 @@ Java_com_pushreel_linkaudio_JniNativeBridge_nativeGetAudioStatus(
   }
 }
 
+extern "C" JNIEXPORT jlongArray JNICALL
+Java_com_pushreel_linkaudio_JniNativeBridge_nativeGetPeakLevels(
+    JNIEnv* env, jobject, jlong handle) {
+  try {
+    const auto instance = findInstance(env, handle);
+    if (!instance) return nullptr;
+    const auto peaks = instance->fifoSnapshot()->drainPeakLevels();
+    const std::array<jlong, 3> values{
+        unsignedToJavaLong(peaks.left),
+        unsignedToJavaLong(peaks.right),
+        unsignedToJavaLong(peaks.framesObserved)};
+    const auto result = env->NewLongArray(static_cast<jsize>(values.size()));
+    if (result != nullptr) {
+      env->SetLongArrayRegion(result, 0, static_cast<jsize>(values.size()), values.data());
+    }
+    return result;
+  } catch (...) {
+    translateCurrentException(env, "Unable to read Link Audio peaks");
+    return nullptr;
+  }
+}
+
 extern "C" JNIEXPORT void JNICALL
 Java_com_pushreel_linkaudio_JniNativeBridge_nativeSetEnabled(
     JNIEnv* env, jobject, jlong handle, jboolean enabled) {

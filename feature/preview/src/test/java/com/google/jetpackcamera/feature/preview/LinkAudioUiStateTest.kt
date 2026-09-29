@@ -22,6 +22,7 @@ import com.pushreel.linkaudio.LinkAudioBufferMetadata
 import com.pushreel.linkaudio.LinkAudioChannel
 import com.pushreel.linkaudio.LinkAudioPcmRead
 import com.pushreel.linkaudio.LinkAudioPcmStatus
+import com.pushreel.linkaudio.LinkAudioPeakLevels
 import com.pushreel.linkaudio.LinkAudioStatus
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -83,6 +84,28 @@ class LinkAudioUiStateTest {
         )
 
         assertThat(state.pcmStatus).isEqualTo(pcmStatus)
+    }
+
+    @Test
+    fun peakLevelsOnlyAppearForReadySelectedSource() {
+        val levels = LinkAudioPeakLevels(4_000, 8_000, 2_400)
+        val status = LinkAudioStatus(
+            linkEnabled = true,
+            linkAudioEnabled = true,
+            channels = listOf(channel)
+        )
+        val readyPcm = LinkAudioPcmStatus(
+            selectedChannelId = channel.id,
+            channelSelected = true,
+            sampleRate = 48_000
+        )
+
+        assertThat(status.toUiState(true, channel.id, readyPcm, levels).peakLevels)
+            .isEqualTo(levels)
+        assertThat(status.toUiState(false, channel.id, readyPcm, levels).peakLevels)
+            .isEqualTo(LinkAudioPeakLevels())
+        assertThat(status.toUiState(true, "other", readyPcm, levels).peakLevels)
+            .isEqualTo(LinkAudioPeakLevels())
     }
 
     @Test
@@ -420,6 +443,7 @@ class LinkAudioUiStateTest {
 private class FakeLinkAudioClient : LinkAudioClientFacade {
     override val status = MutableStateFlow(LinkAudioStatus())
     override val pcmStatus = MutableStateFlow(LinkAudioPcmStatus())
+    override val peakLevels = MutableStateFlow(LinkAudioPeakLevels())
     val selectedChannelIds = mutableListOf<String?>()
     var closed = false
     var readCount = 0

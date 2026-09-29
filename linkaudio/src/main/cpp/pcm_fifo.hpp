@@ -52,6 +52,12 @@ class BasicPcmFifo {
     std::uint32_t invalidBufferCount{};
   };
 
+  struct PeakLevels {
+    std::uint32_t left{};
+    std::uint32_t right{};
+    std::uint32_t framesObserved{};
+  };
+
   static_assert(kCapacityFrames > 0 && (kCapacityFrames & (kCapacityFrames - 1)) == 0);
   static_assert(kDescriptorCapacity > 0
                 && (kDescriptorCapacity & (kDescriptorCapacity - 1)) == 0);
@@ -59,6 +65,7 @@ class BasicPcmFifo {
   static_assert(kDescriptorCapacity < (std::numeric_limits<std::uint32_t>::max() / 2));
   static_assert(sizeof(std::uint32_t) == sizeof(unsigned int));
   static_assert(ATOMIC_INT_LOCK_FREE == 2);
+  static_assert(ATOMIC_LLONG_LOCK_FREE == 2);
 
   // initialPosition lets host tests exercise uint32_t wrap without billions of writes.
   explicit BasicPcmFifo(const std::uint32_t initialPosition = 0) noexcept
@@ -82,6 +89,17 @@ class BasicPcmFifo {
     }
     const auto frames = static_cast<std::uint32_t>(numFrames);
     receivedFrames_.fetch_add(frames, std::memory_order_relaxed);
+    // Meter the incoming signal even when the recording FIFO is full. The callback only
+    // publishes one atomic maximum per channel and never waits for the JNI reader.
+    std::uint32_t leftPeak = 0;
+    std::uint32_t rightPeak = 0;
+    for (std::uint32_t frame = 0; frame < frames; ++frame) {
+      const auto source = static_cast<std::size_t>(frame) * numChannels;
+      leftPeak = std::max(leftPeak, magnitude(samples[source]));
+      rightPeak = std::max(
+          rightPeak, magnitude(samples[source + (numChannels == 2 ? 1 : 0)]));
+    }
+    publishPeak(leftPeak, rightPeak, frames);
     if (frames > kCapacityFrames) {
       recordOverflow(frames);
       return;
@@ -217,7 +235,49 @@ class BasicPcmFifo {
                   invalidBufferCount_.load(std::memory_order_relaxed)};
   }
 
+  // Called by one polling consumer. Independent of PCM reads and recording-start discards.
+  PeakLevels drainPeakLevels() noexcept {
+    const auto packed = peakWindow_.exchange(0, std::memory_order_acq_rel);
+    return PeakLevels{
+        static_cast<std::uint32_t>(packed & kPeakMask),
+        static_cast<std::uint32_t>((packed >> kRightShift) & kPeakMask),
+        static_cast<std::uint32_t>(packed >> kFrameShift)};
+  }
+
  private:
+  static constexpr std::uint32_t kRightShift = 17;
+  static constexpr std::uint32_t kFrameShift = 34;
+  static constexpr std::uint64_t kPeakMask = (std::uint64_t{1} << 17) - 1;
+  static constexpr std::uint64_t kFrameMaskInPeakWindow = (std::uint64_t{1} << 30) - 1;
+
+  static std::uint32_t magnitude(const std::int16_t sample) noexcept {
+    const auto wide = static_cast<std::int32_t>(sample);
+    return static_cast<std::uint32_t>(wide < 0 ? -wide : wide);
+  }
+
+  void publishPeak(
+      const std::uint32_t left, const std::uint32_t right,
+      const std::uint32_t frames) noexcept {
+    auto current = peakWindow_.load(std::memory_order_relaxed);
+    for (;;) {
+      const auto previousFrames = current >> kFrameShift;
+      const auto addedFrames = previousFrames + static_cast<std::uint64_t>(frames);
+      const auto combinedFrames = addedFrames > kFrameMaskInPeakWindow
+          ? kFrameMaskInPeakWindow : addedFrames;
+      const auto combinedLeft = std::max(
+          static_cast<std::uint32_t>(current & kPeakMask), left);
+      const auto combinedRight = std::max(
+          static_cast<std::uint32_t>((current >> kRightShift) & kPeakMask), right);
+      const auto next = (combinedFrames << kFrameShift)
+          | (static_cast<std::uint64_t>(combinedRight) << kRightShift)
+          | combinedLeft;
+      if (peakWindow_.compare_exchange_weak(
+              current, next, std::memory_order_release, std::memory_order_relaxed)) {
+        return;
+      }
+    }
+  }
+
   struct Descriptor {
     std::uint32_t startFrame;
     std::uint32_t frames;
@@ -251,6 +311,7 @@ class BasicPcmFifo {
   std::atomic<std::uint32_t> underrunFrames_{0};
   std::atomic<std::uint32_t> underrunCount_{0};
   std::atomic<std::uint32_t> invalidBufferCount_{0};
+  alignas(64) std::atomic<std::uint64_t> peakWindow_{0};
 };
 
 using PcmFifo = BasicPcmFifo<>;

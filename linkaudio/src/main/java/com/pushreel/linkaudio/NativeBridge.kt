@@ -25,6 +25,7 @@ internal interface NativeBridge {
     fun readAudioFrames(handle: Long, destination: ShortArray, requestedFrames: Int): LongArray?
     fun discardBufferedAudio(handle: Long): Long
     fun getAudioStatus(handle: Long): LongArray
+    fun getPeakLevels(handle: Long): LongArray
 }
 
 internal object JniNativeBridge : NativeBridge {
@@ -50,6 +51,7 @@ internal object JniNativeBridge : NativeBridge {
     ): LongArray? = nativeReadAudioFrames(handle, destination, requestedFrames)
     override fun discardBufferedAudio(handle: Long): Long = nativeDiscardBufferedAudio(handle)
     override fun getAudioStatus(handle: Long): LongArray = nativeGetAudioStatus(handle)
+    override fun getPeakLevels(handle: Long): LongArray = nativeGetPeakLevels(handle)
 
     private external fun nativeCreate(peerNameUtf8: ByteArray): Long
     private external fun nativeClose(handle: Long)
@@ -64,4 +66,5 @@ internal object JniNativeBridge : NativeBridge {
     ): LongArray?
     private external fun nativeDiscardBufferedAudio(handle: Long): Long
     private external fun nativeGetAudioStatus(handle: Long): LongArray
+    private external fun nativeGetPeakLevels(handle: Long): LongArray
 }

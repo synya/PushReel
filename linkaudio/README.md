@@ -21,6 +21,11 @@ buffers by PCM frame count and sample rate. It does not follow packet arrival ji
 keeps recording usable when absolute Link timing is grossly stale, but can retain network
 latency as A/V offset; measured Push 3 synchronization is still pending.
 
+For the UI stereo peak meter, the native FIFO also accumulates L/R sample magnitudes from
+incoming PCM in a bounded atomic window. A dedicated JNI snapshot drains only that peak
+window, never the recording FIFO. Kotlin polls it at about 20 Hz while a source is
+selected; silence, no new PCM, and unavailable sources remain distinct UI states.
+
 Run `./scripts/test-linkaudio-fifo.ps1` on the Windows development host to compile and execute the
 standalone FIFO contract test with strict compiler warnings.
 

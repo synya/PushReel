@@ -21,6 +21,23 @@ import org.junit.Test
 
 class LinkAudioModelsTest {
     @Test
+    fun decodePeakLevels_clampsSamplesAndClearsEmptyWindow() {
+        assertThat(decodePeakLevels(longArrayOf(40_000, -5, 512))).isEqualTo(
+            LinkAudioPeakLevels(leftPeakAbs = 32_768, rightPeakAbs = 0, framesObserved = 512)
+        )
+        assertThat(decodePeakLevels(longArrayOf(100, 200, 0))).isEqualTo(
+            LinkAudioPeakLevels()
+        )
+    }
+
+    @Test
+    fun decodePeakLevels_rejectsMalformedWindow() {
+        assertThrows(IllegalArgumentException::class.java) {
+            decodePeakLevels(longArrayOf(1, 2))
+        }
+    }
+
+    @Test
     fun decodeChannels_mapsCopiedNativeFields() {
         val channels = decodeChannels(
             arrayOf(

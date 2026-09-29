@@ -118,6 +118,35 @@ class LinkAudioDelegateTest {
     }
 
     @Test
+    fun peakPollingIsIndependentAndClearsOnSelectionChange() = runTest {
+        val native = FakeNativeBridge()
+        val delegate = createDelegate(native, pollIntervalMillis = 500)
+        runCurrent()
+        native.status = longArrayOf(1, 1, 1)
+        delegate.setEnabled(true)
+        delegate.selectChannel("main")
+        runCurrent()
+        native.operations.clear()
+        native.peakResult = longArrayOf(1234, 2345, 2_400)
+
+        advanceTimeBy(50)
+        runCurrent()
+
+        assertThat(native.operations).containsExactly("peaks")
+        assertThat(delegate.peakLevels.value).isEqualTo(
+            LinkAudioPeakLevels(1234, 2345, 2_400)
+        )
+
+        delegate.selectChannel("other")
+        assertThat(delegate.peakLevels.value).isEqualTo(LinkAudioPeakLevels())
+        runCurrent()
+        delegate.setEnabled(false)
+        assertThat(delegate.peakLevels.value).isEqualTo(LinkAudioPeakLevels())
+        delegate.close()
+        runCurrent()
+    }
+
+    @Test
     fun selectionAndPcmReadAreSerializedThroughActor() = runTest {
         val native = FakeNativeBridge()
         val delegate = createDelegate(native)
@@ -325,6 +354,7 @@ private class FakeNativeBridge : NativeBridge {
     var disableFailuresRemaining = 0
     var readResult: LongArray? = null
     var discardedFrames = 0L
+    var peakResult = longArrayOf(0, 0, 0)
 
     override fun create(peerNameUtf8: ByteArray): Long {
         operations += "create"
@@ -382,6 +412,11 @@ private class FakeNativeBridge : NativeBridge {
             values[2] = 2
             values[4] = 96_000
         }
+    }
+
+    override fun getPeakLevels(handle: Long): LongArray {
+        operations += "peaks"
+        return peakResult
     }
 }
 
