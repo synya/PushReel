@@ -27,12 +27,12 @@ record button is pressed and carries it through the camera command path into the
 camera session. A ready Link plan contains the selected peer/channel, source format,
 selection generation, and a coarse single-consumer PCM reader. The reader distinguishes
 data, a temporary underrun, source invalidation, invalid timing, and a read failure.
-Each valid read now carries the first PCM frame's timestamp in Android's monotonic
+Each valid read carries the first PCM frame's timestamp in Android's monotonic
 `elapsedRealtime` timebase. Native code derives one anchor from the exact Link buffer
 descriptor, converts `CLOCK_MONOTONIC_RAW` to `CLOCK_BOOTTIME` with a bounded clock
-sampling bracket, and advances partial reads by frame offset and sample rate. Ready and
-temporarily unavailable Link recording requests are still rejected explicitly and never
-fall back to the phone microphone while custom finalization is validated on-device.
+sampling bracket, and advances partial reads by frame offset and sample rate. Ready Link
+recording requests use the custom backend; unavailable sources are rejected explicitly
+and never fall back to the phone microphone.
 
 Recording backend selection is now part of the camera session configuration rather than
 a decision made after CameraX has already bound its use cases. Each concrete CameraX
@@ -59,20 +59,37 @@ output creates a pending MediaStore item, commits it after successful finalizati
 deletes it on failure. Explicit and cache destinations, pause/resume, unavailable Link
 sources, non-stereo input, and Android versions below 10 are rejected explicitly. The
 continuous video encoder uses a tested stop-cutoff callback barrier and does not receive
-EOS because CameraX must keep its input surface alive. Production Link recording remains
-guarded until that tail behavior and the resulting MP4 are verified on the physical
-phone. The inherited CameraX Recorder path remains unchanged when Link is disabled.
+EOS because CameraX must keep its input surface alive. The inherited CameraX Recorder
+path remains available when Link is disabled.
+
+A device test exposed Link PCM whose reported presentation time was many seconds
+behind its arrival, even though fresh samples continued to arrive. Applying that stale
+absolute time to a new recording discarded every audio frame and made finalization fail.
+For grossly stale metadata (more than two seconds), a temporary recovery path anchors
+the first received buffer to its receipt time once, then advances by exact PCM frame
+counts and sample rate. Repeated partial reads reuse the same anchor, and packet-count
+gaps do not re-anchor to arrival. This restores recording at the cost of potentially
+retaining network latency as A/V offset; it does not recover earlier audio or solve
+subsecond synchronization. Normal Link timing metadata remains the preferred path.
+
+After the recovery build was installed, the user confirmed that a short physical-phone
+recording with Link enabled and Ableton Live on a laptop saved successfully and contains
+audio. Synchronization sounded plausible, but that test could not establish the offset.
+A Push 3 pad-hit test is pending. The
+Ableton Link submodule was updated to `13c5744`; whether that upstream change contributed
+to the successful recording is not established.
 
 ## Next implementation slice
 
-Add a targeted device harness for the guarded AAC/muxer session, verify the stop-cutoff
-barrier and complete MP4 against the Push 3, and only then remove the production guard.
-Record several minutes, inspect AAC/AVC stream metadata and A/V offset, confirm Gallery
-playback, then harden disconnect and lifecycle failure behavior from device results.
+Preserve the now-working recording path while improving usability. The user will measure
+A/V offset with Push 3 pad hits. If an offset is audible or visible, use that result to
+design a bounded correction for network/playout latency; do not assume the earlier
+multi-second stale metadata value is the physical A/V delay. Longer recordings, Gallery
+playback, disconnect behavior, and background/foreground lifecycle remain to verify.
 
 ## Verification
 
-Verified through 2026-09-22:
+Verified through 2026-09-29:
 
 - `:app:assembleStableDebug` completed successfully.
 - The project Spotless checks completed successfully against `upstream/main`.
@@ -92,7 +109,7 @@ Verified through 2026-09-22:
   cancellation coverage.
 - Recording controller tests verify that a ready Link source reaches `CameraSystem`, an
   unavailable Link source is rejected, and the default camera source still starts the
-  inherited recording path. `CameraSystem` retains the final ready-Link production guard.
+  inherited recording path.
 - Custom recording unit tests cover PCM trimming against the shared origin, monotonic
   track timestamps, keyframe retention before AAC format, audio before the first
   keyframe, bounded pre-start overflow, stop-cutoff acknowledgement, and mandatory
@@ -134,15 +151,22 @@ Verified through 2026-09-22:
   physical phone, showed the camera preview and the accessible Link Audio status
   control, and remained running without a startup crash.
 
-Still to verify manually: the new Link Audio AAC/AVC MP4 path on a physical phone, Link
-lifecycle across background/foreground transitions, A/V synchronization over longer
-recordings, and Gallery playback after custom finalization.
+The latest `:app:assembleStableDebug` and `:linkaudio:testStableDebugUnitTest` passed.
+The native PCM FIFO/timing host test passed. The debug APK was installed with
+`scripts/install-debug-owner.ps1` and verified for Android `userId 0` only. The user
+confirmed a saved Link Audio video with audible external audio on the physical phone.
+The standalone `spotlessCheck` task is unavailable in the current Gradle configuration;
+`git diff --check` passed.
+
+Still to verify manually: measured Push 3 pad-hit A/V offset, sustained recording,
+Link lifecycle across background/foreground transitions, disconnect behavior, and
+Gallery playback after custom finalization.
 
 On the tested Samsung phone, use `./scripts/install-debug-owner.ps1` for deployment
 to its main profile (`userId 0`). It passes `--user 0` to ADB and verifies that no
 other Android user is marked as installed. Existing secondary-profile installations
 are reported and left untouched to avoid deleting their app data.
 
-Ableton Link is pinned as the `third_party/ableton-link` Git submodule at the stable
-`Link-4.0` tag. Its GPLv2+ and proprietary dual-license notices are preserved in the
+Ableton Link is pinned as the `third_party/ableton-link` Git submodule at commit
+`13c5744` following the `Link-4.0` tag. Its GPLv2+ and proprietary dual-license notices are preserved in the
 submodule. Public distribution must satisfy the selected Ableton Link license.

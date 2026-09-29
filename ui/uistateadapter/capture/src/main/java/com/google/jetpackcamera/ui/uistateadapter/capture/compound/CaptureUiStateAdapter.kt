@@ -198,5 +198,8 @@ internal fun roundVideoRecordingState(
         is VideoRecordingState.Active.Paused -> videoRecordingState.copy(
             elapsedTimeNanos = roundedNanos
         )
+        is VideoRecordingState.Active.Stopping -> videoRecordingState.copy(
+            elapsedTimeNanos = roundedNanos
+        )
     }
 }

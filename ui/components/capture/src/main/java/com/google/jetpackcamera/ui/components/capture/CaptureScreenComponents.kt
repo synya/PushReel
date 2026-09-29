@@ -232,7 +232,9 @@ fun PauseResumeToggleButton(
     currentRecordingStateProvider: () -> VideoRecordingState
 ) {
     val currentRecordingState = currentRecordingStateProvider()
-    if (currentRecordingState is VideoRecordingState.Active) {
+    if (currentRecordingState is VideoRecordingState.Active.Recording ||
+        currentRecordingState is VideoRecordingState.Active.Paused
+    ) {
         FilledIconToggleButton(
             checked = currentRecordingState is VideoRecordingState.Active.Recording,
             onCheckedChange = {
@@ -250,6 +252,7 @@ fun PauseResumeToggleButton(
                     is VideoRecordingState.Active.Paused -> painterResource(
                         R.drawable.ic_play_arrow
                     )
+                    is VideoRecordingState.Active.Stopping -> error("Stopping state is not shown")
                 },
                 contentDescription = stringResource(id = R.string.pause_resume_button_description)
             )

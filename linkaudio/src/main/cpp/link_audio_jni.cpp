@@ -15,6 +15,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cinttypes>
 #include <cstdint>
 #include <cstring>
 #include <cmath>
@@ -33,6 +34,7 @@ namespace {
 constexpr double kRecordingQuantum = 4.0;
 constexpr std::int64_t kMaxClockBracketUs = 2'000;
 constexpr int kClockMappingAttempts = 3;
+constexpr std::uint32_t kTimingMappingLogBudget = 12;
 
 struct LinkInstance {
   explicit LinkInstance(std::string peerName)
@@ -46,14 +48,23 @@ struct LinkInstance {
     {
       std::lock_guard<std::mutex> timingLock(timingMutex);
       timingAnchorCache.reset();
+      timingDiagnostics.reset();
+      fallbackTiming.reset();
+      timingMappingLogsRemaining = kTimingMappingLogBudget;
     }
     if (channelId) {
+      const auto callbackClock = link.clock();
       source = std::make_unique<ableton::LinkAudioSource>(
           link,
           *channelId,
-          [replacement](const ableton::LinkAudioSource::BufferHandle buffer) noexcept {
+          [replacement, callbackClock](
+              const ableton::LinkAudioSource::BufferHandle buffer) noexcept {
             pushreel::linkaudio::PcmFifo::BufferMetadata metadata{
-                buffer.info.count, buffer.info.sessionBeatTime, buffer.info.tempo, {}};
+                buffer.info.count,
+                buffer.info.sessionBeatTime,
+                buffer.info.tempo,
+                {},
+                callbackClock.micros().count()};
             std::copy(
                 buffer.info.sessionId.begin(),
                 buffer.info.sessionId.end(),
@@ -73,6 +84,9 @@ struct LinkInstance {
     source.reset();
     std::lock_guard<std::mutex> timingLock(timingMutex);
     timingAnchorCache.reset();
+    timingDiagnostics.reset();
+    fallbackTiming.reset();
+    timingMappingLogsRemaining = kTimingMappingLogBudget;
   }
 
   bool hasSource() const {
@@ -85,17 +99,50 @@ struct LinkInstance {
     return fifo;
   }
 
+  std::uint32_t discardBufferedAudio() {
+    const auto discarded = fifoSnapshot()->discardBufferedFrames();
+    std::lock_guard<std::mutex> timingLock(timingMutex);
+    timingAnchorCache.reset();
+    timingDiagnostics.reset();
+    fallbackTiming.reset();
+    timingMappingLogsRemaining = kTimingMappingLogBudget;
+    return discarded;
+  }
+
   ableton::LinkAudio link;
   std::shared_ptr<pushreel::linkaudio::PcmFifo> fifo;
   mutable std::mutex sourceMutex;
   std::unique_ptr<ableton::LinkAudioSource> source;
   std::mutex timingMutex;
   pushreel::linkaudio::TimingAnchorCache timingAnchorCache;
+  pushreel::linkaudio::TimingDiagnostics timingDiagnostics;
+  pushreel::linkaudio::FallbackTimingNormalizer fallbackTiming;
+  std::uint32_t timingMappingLogsRemaining{kTimingMappingLogBudget};
 };
 
 std::optional<std::int64_t> elapsedRealtimeUsForRead(
     LinkInstance& instance,
     const pushreel::linkaudio::PcmFifo::ReadResult& read) {
+  struct TimingMappingLog {
+    std::uint64_t count{};
+    std::uint32_t bufferFrames{};
+    std::uint32_t sampleRate{};
+    double sessionBeatTime{};
+    double tempo{};
+    std::array<std::uint8_t, 8> sessionId{};
+    double beginBeats{};
+    std::int64_t metadataBeginRawUs{};
+    std::int64_t effectiveBeginRawUs{};
+    std::int64_t receivedRawUs{};
+    std::int64_t mappedElapsedRealtimeUs{};
+    std::int64_t interBufferDeltaUs{};
+    bool hasInterBufferDelta{};
+    bool countDiscontinuity{};
+    bool fallbackActive{};
+    bool fallbackEntered{};
+    bool fallbackReanchored{};
+    std::uint32_t logIndex{};
+  };
   if (read.frames == 0 || read.sampleRate == 0 || read.bufferFrames == 0
       || read.bufferOffsetFrames > read.bufferFrames
       || !std::isfinite(read.metadata.sessionBeatTime)
@@ -121,17 +168,21 @@ std::optional<std::int64_t> elapsedRealtimeUsForRead(
     // before consulting the cache so an old-session anchor can never bypass validation.
     return std::nullopt;
   }
-
   const auto identity = pushreel::linkaudio::BufferTimingIdentity{
       read.metadata.count,
       read.metadata.sessionId,
       read.bufferFrames,
       read.sampleRate};
   std::int64_t bufferBeginElapsedRealtimeUs{};
+  std::optional<TimingMappingLog> timingMappingLog;
   {
     std::lock_guard<std::mutex> lock(instance.timingMutex);
     if (!instance.timingAnchorCache.get(identity, bufferBeginElapsedRealtimeUs)) {
-      const auto beginRawUs = state.timeAtBeat(*beginBeats, kRecordingQuantum).count();
+      const auto metadataBeginRawUs =
+          state.timeAtBeat(*beginBeats, kRecordingQuantum).count();
+      const auto fallback = instance.fallbackTiming.normalize(
+          identity, metadataBeginRawUs, read.metadata.receivedRawUs);
+      const auto effectiveBeginRawUs = fallback.bufferBeginRawUs;
       const auto clock = instance.link.clock();
       bool mapped = false;
       for (auto attempt = 0; attempt < kClockMappingAttempts && !mapped; ++attempt) {
@@ -142,7 +193,7 @@ std::optional<std::int64_t> elapsedRealtimeUsForRead(
         const auto bootUs = static_cast<std::int64_t>(bootTime.tv_sec) * 1'000'000
                             + static_cast<std::int64_t>(bootTime.tv_nsec) / 1'000;
         mapped = pushreel::linkaudio::mapRawToElapsedRealtimeUs(
-            beginRawUs,
+            effectiveBeginRawUs,
             rawBeforeUs,
             bootUs,
             rawAfterUs,
@@ -150,8 +201,81 @@ std::optional<std::int64_t> elapsedRealtimeUsForRead(
             bufferBeginElapsedRealtimeUs);
       }
       if (!mapped) return std::nullopt;
+      const auto diagnosticsBefore = instance.timingDiagnostics.snapshot();
+      instance.timingDiagnostics.observe(
+          identity, metadataBeginRawUs, read.metadata.receivedRawUs);
+      const auto diagnosticsAfter = instance.timingDiagnostics.snapshot();
       instance.timingAnchorCache.put(identity, bufferBeginElapsedRealtimeUs);
+      if (instance.timingMappingLogsRemaining > 0) {
+        const auto logIndex = kTimingMappingLogBudget - instance.timingMappingLogsRemaining + 1;
+        timingMappingLog = TimingMappingLog{
+            read.metadata.count,
+            read.bufferFrames,
+            read.sampleRate,
+            read.metadata.sessionBeatTime,
+            read.metadata.tempo,
+            read.metadata.sessionId,
+            *beginBeats,
+            metadataBeginRawUs,
+            effectiveBeginRawUs,
+            read.metadata.receivedRawUs,
+            bufferBeginElapsedRealtimeUs,
+            diagnosticsAfter.latestInterBufferDeltaUs,
+            diagnosticsAfter.interBufferTimingCount
+                > diagnosticsBefore.interBufferTimingCount,
+            diagnosticsAfter.bufferCountDiscontinuityCount
+                > diagnosticsBefore.bufferCountDiscontinuityCount,
+            fallback.active,
+            fallback.entered,
+            fallback.reanchored,
+            logIndex};
+        --instance.timingMappingLogsRemaining;
+      }
     }
+  }
+
+  if (timingMappingLog) {
+    const auto currentRawUs = static_cast<std::int64_t>(
+        instance.link.clock().micros().count());
+    const auto presentationLatenessUs =
+        timingMappingLog->receivedRawUs - timingMappingLog->metadataBeginRawUs;
+    __android_log_print(
+        timingMappingLog->fallbackEntered ? ANDROID_LOG_WARN : ANDROID_LOG_INFO,
+        "PushReelLinkAudio",
+        "timing-chunk index=%" PRIu32 "/%" PRIu32 " count=%" PRIu64
+        " numFrames=%" PRIu32 " sampleRate=%" PRIu32
+        " sessionBeatTime=%.6f tempo=%.6f sessionId=%02x%02x%02x%02x"
+        " beginBeats=%.6f metadataBeginRawUs=%" PRId64
+        " effectiveBeginRawUs=%" PRId64
+        " receivedRawUs=%" PRId64 " currentRawUs=%" PRId64
+        " latenessUs=%" PRId64 " mappedElapsedRealtimeUs=%" PRId64
+        " interBufferDeltaUs=%" PRId64 " interBufferDeltaValid=%d"
+        " countDiscontinuity=%d fallbackActive=%d fallbackEntered=%d"
+        " fallbackReanchored=%d",
+        timingMappingLog->logIndex,
+        kTimingMappingLogBudget,
+        timingMappingLog->count,
+        timingMappingLog->bufferFrames,
+        timingMappingLog->sampleRate,
+        timingMappingLog->sessionBeatTime,
+        timingMappingLog->tempo,
+        static_cast<unsigned int>(timingMappingLog->sessionId[0]),
+        static_cast<unsigned int>(timingMappingLog->sessionId[1]),
+        static_cast<unsigned int>(timingMappingLog->sessionId[2]),
+        static_cast<unsigned int>(timingMappingLog->sessionId[3]),
+        timingMappingLog->beginBeats,
+        timingMappingLog->metadataBeginRawUs,
+        timingMappingLog->effectiveBeginRawUs,
+        timingMappingLog->receivedRawUs,
+        currentRawUs,
+        presentationLatenessUs,
+        timingMappingLog->mappedElapsedRealtimeUs,
+        timingMappingLog->interBufferDeltaUs,
+        timingMappingLog->hasInterBufferDelta ? 1 : 0,
+        timingMappingLog->countDiscontinuity ? 1 : 0,
+        timingMappingLog->fallbackActive ? 1 : 0,
+        timingMappingLog->fallbackEntered ? 1 : 0,
+        timingMappingLog->fallbackReanchored ? 1 : 0);
   }
 
   std::int64_t result{};
@@ -396,6 +520,19 @@ Java_com_pushreel_linkaudio_JniNativeBridge_nativeReadAudioFrames(
   }
 }
 
+extern "C" JNIEXPORT jlong JNICALL
+Java_com_pushreel_linkaudio_JniNativeBridge_nativeDiscardBufferedAudio(
+    JNIEnv* env, jobject, jlong handle) {
+  try {
+    const auto instance = findInstance(env, handle);
+    if (!instance) return 0;
+    return unsignedToJavaLong(instance->discardBufferedAudio());
+  } catch (...) {
+    translateCurrentException(env, "Unable to discard buffered Link Audio PCM");
+    return 0;
+  }
+}
+
 extern "C" JNIEXPORT jlongArray JNICALL
 Java_com_pushreel_linkaudio_JniNativeBridge_nativeGetAudioStatus(
     JNIEnv* env, jobject, jlong handle) {
@@ -403,7 +540,12 @@ Java_com_pushreel_linkaudio_JniNativeBridge_nativeGetAudioStatus(
     const auto instance = findInstance(env, handle);
     if (!instance) return nullptr;
     const auto status = instance->fifoSnapshot()->status();
-    const std::array<jlong, 12> values{
+    pushreel::linkaudio::TimingDiagnosticsSnapshot timingStatus;
+    {
+      std::lock_guard<std::mutex> lock(instance->timingMutex);
+      timingStatus = instance->timingDiagnostics.snapshot();
+    }
+    const std::array<jlong, 22> values{
         instance->hasSource() ? 1 : 0,
         unsignedToJavaLong(status.sampleRate),
         pushreel::linkaudio::PcmFifo::kOutputChannels,
@@ -415,7 +557,17 @@ Java_com_pushreel_linkaudio_JniNativeBridge_nativeGetAudioStatus(
         unsignedToJavaLong(status.overflowCount),
         unsignedToJavaLong(status.underrunFrames),
         unsignedToJavaLong(status.underrunCount),
-        unsignedToJavaLong(status.invalidBufferCount)};
+        unsignedToJavaLong(status.invalidBufferCount),
+        static_cast<jlong>(timingStatus.timedBufferCount),
+        static_cast<jlong>(timingStatus.latestPresentationLatenessUs),
+        static_cast<jlong>(timingStatus.minPresentationLatenessUs),
+        static_cast<jlong>(timingStatus.maxPresentationLatenessUs),
+        static_cast<jlong>(timingStatus.interBufferTimingCount),
+        static_cast<jlong>(timingStatus.latestInterBufferDeltaUs),
+        static_cast<jlong>(timingStatus.minInterBufferDeltaUs),
+        static_cast<jlong>(timingStatus.maxInterBufferDeltaUs),
+        static_cast<jlong>(timingStatus.bufferCountDiscontinuityCount),
+        static_cast<jlong>(timingStatus.timestampDiscontinuityCount)};
     const auto result = env->NewLongArray(static_cast<jsize>(values.size()));
     if (result != nullptr) {
       env->SetLongArrayRegion(result, 0, static_cast<jsize>(values.size()), values.data());

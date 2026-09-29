@@ -76,6 +76,9 @@ class LinkAudioClient @JvmOverloads constructor(
         maxFrames: Int = destination.size / 2
     ): LinkAudioPcmRead = delegate.readPcmFrames(destination, maxFrames)
 
+    /** Discards PCM already buffered for the selected channel and returns its frame count. */
+    suspend fun discardBufferedPcmFrames(): Long = delegate.discardBufferedPcmFrames()
+
     override fun close() = delegate.close()
 
     /** Waits until native shutdown and multicast-lock release have completed. */
@@ -172,6 +175,19 @@ internal class LinkAudioDelegate(
         }
     }
 
+    suspend fun discardBufferedPcmFrames(): Long {
+        if (closed.get()) return 0L
+        val result = CompletableDeferred<Long>()
+        return withContext(NonCancellable) {
+            try {
+                commands.send(ActorCommand.DiscardBufferedAudio(result))
+                result.await()
+            } catch (_: ClosedSendChannelException) {
+                0L
+            }
+        }
+    }
+
     override fun close() {
         if (closed.compareAndSet(false, true)) {
             pollingJob.cancel()
@@ -200,7 +216,7 @@ internal class LinkAudioDelegate(
             if (handle != null) refresh(handle)
             for (command in commands) {
                 if (closed.get()) {
-                    if (command is ActorCommand.Read) command.result.complete(EMPTY_PCM_READ)
+                    completeWithoutNative(command)
                     continue
                 }
                 if (handle != null) applyPendingSafetyControls(handle)
@@ -224,6 +240,11 @@ internal class LinkAudioDelegate(
                     } else {
                         command.result.complete(EMPTY_PCM_READ)
                     }
+                    is ActorCommand.DiscardBufferedAudio -> if (handle != null) {
+                        discardBufferedAudio(handle, command)
+                    } else {
+                        command.result.complete(0L)
+                    }
                 }
             }
         } finally {
@@ -232,7 +253,7 @@ internal class LinkAudioDelegate(
             commands.close()
             while (true) {
                 val pending = commands.tryReceive().getOrNull() ?: break
-                if (pending is ActorCommand.Read) pending.result.complete(EMPTY_PCM_READ)
+                completeWithoutNative(pending)
             }
             _status.value = LinkAudioStatus(error = _status.value.error)
             _pcmStatus.value = LinkAudioPcmStatus()
@@ -318,6 +339,32 @@ internal class LinkAudioDelegate(
         } catch (error: Exception) {
             reportError(error)
             request.result.complete(EMPTY_PCM_READ)
+        }
+    }
+
+    private fun discardBufferedAudio(
+        handle: Long,
+        request: ActorCommand.DiscardBufferedAudio
+    ) {
+        try {
+            val discardedFrames = nativeBridge.discardBufferedAudio(handle)
+            try {
+                updatePcmStatus(handle)
+            } catch (error: Exception) {
+                reportError(error)
+            }
+            request.result.complete(discardedFrames)
+        } catch (error: Exception) {
+            reportError(error)
+            request.result.completeExceptionally(error)
+        }
+    }
+
+    private fun completeWithoutNative(command: ActorCommand) {
+        when (command) {
+            is ActorCommand.Read -> command.result.complete(EMPTY_PCM_READ)
+            is ActorCommand.DiscardBufferedAudio -> command.result.complete(0L)
+            else -> Unit
         }
     }
 
@@ -417,6 +464,9 @@ internal class LinkAudioDelegate(
             val destination: ShortArray,
             val maxFrames: Int,
             val result: CompletableDeferred<LinkAudioPcmRead>
+        ) : ActorCommand
+        data class DiscardBufferedAudio(
+            val result: CompletableDeferred<Long>
         ) : ActorCommand
     }
 

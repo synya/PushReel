@@ -304,6 +304,12 @@ private fun ContentScreen(
             currentCaptureUiStateProvider().videoRecordingState is VideoRecordingState.Active
         }
     }
+    val isVideoRecordingStopping = remember {
+        derivedStateOf {
+            currentCaptureUiStateProvider().videoRecordingState is
+                VideoRecordingState.Active.Stopping
+        }
+    }
 
     val scope = rememberCoroutineScope()
     val zoomStateManager = remember(zoomController) {
@@ -392,11 +398,13 @@ private fun ContentScreen(
 
     val onFlipCamera = remember {
         {
-            val state = flipLensState.value
-            if (state is FlipLensUiState.Available) {
-                quickSettingsController?.setLensFacing(
-                    state.selectedLensFacing.flip()
-                )
+            if (!isVideoRecordingStopping.value) {
+                val state = flipLensState.value
+                if (state is FlipLensUiState.Available) {
+                    quickSettingsController?.setLensFacing(
+                        state.selectedLensFacing.flip()
+                    )
+                }
             }
         }
     }
@@ -454,6 +462,7 @@ private fun ContentScreen(
 
     val linkAudioIndicatorLambda = remember(
         linkAudioUiState,
+        isVideoRecordingStopping,
         onSetLinkAudioEnabled,
         onSelectLinkAudioChannel
     ) {
@@ -461,6 +470,7 @@ private fun ContentScreen(
             LinkAudioIndicator(
                 modifier = modifier,
                 uiState = linkAudioUiState,
+                enabled = !isVideoRecordingStopping.value,
                 onSetEnabled = onSetLinkAudioEnabled,
                 onSelectChannel = onSelectLinkAudioChannel
             )
@@ -547,16 +557,21 @@ private fun ContentScreen(
         }
     }
 
-    val flipCameraButtonLambda = remember(flipLensState, onFlipCamera) {
+    val flipCameraButtonLambda = remember(
+        flipLensState,
+        isVideoRecordingStopping,
+        onFlipCamera
+    ) {
         @Composable { modifier: Modifier ->
             FlipCameraButton(
                 modifier = modifier.testTag(FLIP_CAMERA_BUTTON),
                 onClick = onFlipCamera,
                 flipLensUiState = flipLensState.value,
-                enabledCondition = when (val uiState = flipLensState.value) {
-                    is FlipLensUiState.Available -> uiState.availableLensFacings.size > 1
-                    FlipLensUiState.Unavailable -> false
-                }
+                enabledCondition = !isVideoRecordingStopping.value &&
+                    when (val uiState = flipLensState.value) {
+                        is FlipLensUiState.Available -> uiState.availableLensFacings.size > 1
+                        FlipLensUiState.Unavailable -> false
+                    }
             )
         }
     }
@@ -604,13 +619,29 @@ private fun ContentScreen(
                     )
                 }
             ) {
-                val elapsedTimeModifier = remember(modifier) { modifier.testTag(ELAPSED_TIME_TAG) }
-                ElapsedTimeText(
-                    modifier = elapsedTimeModifier,
-                    elapsedTimeUiStateProvider = {
-                        currentCaptureUiStateProvider().elapsedTimeUiState
+                if (videoRecordingState.value is VideoRecordingState.Active.Stopping) {
+                    val savingText = stringResource(R.string.recording_saving)
+                    Text(
+                        text = savingText,
+                        color = Color.White,
+                        style = MaterialTheme.typography.labelLarge,
+                        fontWeight = FontWeight.Bold,
+                        modifier = modifier
+                            .background(Color.Black.copy(alpha = 0.56f), CircleShape)
+                            .padding(horizontal = 14.dp, vertical = 8.dp)
+                            .semantics { contentDescription = savingText }
+                    )
+                } else {
+                    val elapsedTimeModifier = remember(modifier) {
+                        modifier.testTag(ELAPSED_TIME_TAG)
                     }
-                )
+                    ElapsedTimeText(
+                        modifier = elapsedTimeModifier,
+                        elapsedTimeUiStateProvider = {
+                            currentCaptureUiStateProvider().elapsedTimeUiState
+                        }
+                    )
+                }
             }
         }
     }
@@ -921,18 +952,23 @@ private fun LayoutWrapper(
 @Composable
 private fun LinkAudioIndicator(
     uiState: LinkAudioUiState,
+    enabled: Boolean,
     onSetEnabled: (Boolean) -> Unit,
     onSelectChannel: (String) -> Unit,
     modifier: Modifier = Modifier
 ) {
     var expanded by remember { mutableStateOf(false) }
+    LaunchedEffect(enabled) {
+        if (!enabled) expanded = false
+    }
     val visualState = uiState.visualState()
     val statusColor = visualState.color()
     val selectedChannel = uiState.channels.firstOrNull { it.id == uiState.selectedChannelId }
 
     Box(modifier = modifier) {
         IconButton(
-            onClick = { expanded = true },
+            onClick = { performIfEnabled(enabled) { expanded = true } },
+            enabled = enabled,
             modifier = Modifier
                 .size(48.dp)
                 .semantics { contentDescription = visualState.contentDescription(uiState) }
@@ -957,7 +993,7 @@ private fun LinkAudioIndicator(
             }
         }
         DropdownMenu(
-            expanded = expanded,
+            expanded = expanded && enabled,
             onDismissRequest = { expanded = false },
             modifier = Modifier.widthIn(min = 280.dp, max = 360.dp)
         ) {
@@ -977,12 +1013,16 @@ private fun LinkAudioIndicator(
                 trailingIcon = {
                     Switch(
                         checked = uiState.requestedEnabled,
-                        onCheckedChange = onSetEnabled
+                        enabled = enabled,
+                        onCheckedChange = { checked ->
+                            performIfEnabled(enabled) { onSetEnabled(checked) }
+                        }
                     )
                 },
                 onClick = {
-                    onSetEnabled(!uiState.requestedEnabled)
-                }
+                    performIfEnabled(enabled) { onSetEnabled(!uiState.requestedEnabled) }
+                },
+                enabled = enabled
             )
 
             if (uiState.error != null) {
@@ -1041,9 +1081,12 @@ private fun LinkAudioIndicator(
                         )
                     },
                     onClick = {
-                        onSelectChannel(channel.id)
-                        expanded = false
-                    }
+                        performIfEnabled(enabled) {
+                            onSelectChannel(channel.id)
+                            expanded = false
+                        }
+                    },
+                    enabled = enabled
                 )
             }
 
@@ -1067,6 +1110,12 @@ private fun LinkAudioIndicator(
             }
         }
     }
+}
+
+internal inline fun performIfEnabled(enabled: Boolean, action: () -> Unit): Boolean {
+    if (!enabled) return false
+    action()
+    return true
 }
 
 @Composable

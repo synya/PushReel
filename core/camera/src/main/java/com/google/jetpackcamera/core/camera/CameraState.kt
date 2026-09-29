@@ -202,6 +202,18 @@ sealed interface VideoRecordingState {
             override val audioStreamState: AudioStreamState,
             override val elapsedTimeNanos: Long
         ) : Active
+
+        /**
+         * The stop request was accepted and the recording is being finalized.
+         *
+         * [elapsedTimeNanos] is captured when Stop is accepted so the UI does not continue to
+         * count while encoders and the media container are being finalized.
+         */
+        data class Stopping(
+            override val maxDurationMillis: Long,
+            override val audioStreamState: AudioStreamState,
+            override val elapsedTimeNanos: Long
+        ) : Active
     }
 }
 
@@ -222,4 +234,18 @@ sealed interface OnVideoRecordEvent {
      * @param error The [Throwable] that caused the error.
      */
     data class OnVideoRecordError(val error: Throwable) : OnVideoRecordEvent
+}
+
+internal fun CameraState.withVideoRecordingStopping(
+    elapsedTimeNanos: Long? = null
+): CameraState {
+    val active = videoRecordingState as? VideoRecordingState.Active ?: return this
+    if (active is VideoRecordingState.Active.Stopping) return this
+    return copy(
+        videoRecordingState = VideoRecordingState.Active.Stopping(
+            maxDurationMillis = active.maxDurationMillis,
+            audioStreamState = active.audioStreamState,
+            elapsedTimeNanos = elapsedTimeNanos ?: active.elapsedTimeNanos
+        )
+    )
 }

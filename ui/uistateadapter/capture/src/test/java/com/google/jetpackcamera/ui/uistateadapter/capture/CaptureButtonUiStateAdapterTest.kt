@@ -118,4 +118,23 @@ class CaptureButtonUiStateAdapterTest {
             .isInstanceOf(CaptureButtonUiState.Enabled.Recording.Starting::class.java)
         assertThat(uiState.isEnabled).isTrue()
     }
+
+    @Test
+    fun from_cameraRunning_recordingStopping_returnsSavingAndDisabled() {
+        val cameraState = defaultCameraState.copy(
+            videoRecordingState = VideoRecordingState.Active.Stopping(
+                0L,
+                AudioStreamState.Active(0.0),
+                1_000_000_000L
+            )
+        )
+        val uiState = CaptureButtonUiState.from(
+            defaultCameraAppSettings,
+            cameraState,
+            lockedState = true
+        )
+
+        assertThat(uiState).isEqualTo(CaptureButtonUiState.Saving)
+        assertThat(uiState.isEnabled).isFalse()
+    }
 }

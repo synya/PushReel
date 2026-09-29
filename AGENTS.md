@@ -220,6 +220,35 @@ Always inspect the existing code before changing an unfamiliar subsystem.
 
 ## Hard Rules
 
+### Physical Device UI Control
+
+The user performs all interactions with the application UI on the physical phone.
+
+Codex may:
+
+- build and install the application
+- launch or stop the application process when needed for installation or diagnostics
+- clear, capture, and inspect Logcat and other read-only device diagnostics
+- inspect generated media files and MediaStore results
+
+Codex must not use ADB, UI automation, coordinate taps, swipes, key events, or any other tool to
+operate the application UI on the phone. Ask the user to perform required UI actions such as
+switching capture mode, enabling Link Audio, selecting a peer or channel, starting or stopping a
+recording, and opening or closing panels.
+
+### Physical Device Installation
+
+Always install a PushReel debug APK with the project script:
+
+```powershell
+.\scripts\install-debug-owner.ps1
+```
+
+Pass `-Serial <device-serial>` when more than one Android device is connected. Do not invoke
+`adb install` directly and do not use a Gradle install task. The script is the required installation
+entry point because it installs for Android `userId 0` and verifies that PushReel is not installed
+for Samsung Dual App, Secure Folder, or any other additional Android profile.
+
 ### Product Scope
 
 Build the actual PushReel application from the beginning.
@@ -312,6 +341,18 @@ Video and audio timestamps written to MediaMuxer must use one coherent timebase.
 All MediaMuxer presentation timestamps must be monotonically increasing per track.
 
 Network buffering latency must not become permanent audio/video offset.
+
+Network latency may affect when PCM becomes available for encoding, but it must never affect
+the PCM presentation timestamp. Derive audio PTS from Link timing metadata and the shared
+monotonic timeline, never from callback or packet arrival time.
+
+Temporary device-tested recovery exception: some Link Audio streams report an absolute
+presentation time many seconds behind freshly arriving PCM. Until the sender timeline can be
+reconciled, a stream with metadata more than two seconds behind may anchor its first received
+buffer to callback receipt once, then advance only by PCM frame count and sample rate. Reuse
+that anchor for partial reads and do not re-anchor on every packet or count gap. This mode
+restores a usable recording but may retain network latency as A/V offset. It is not considered
+the final synchronization solution; measure the offset with Push 3 before changing it.
 
 ### Recording State
 
@@ -583,10 +624,14 @@ Before considering a change complete:
 
 1. Build the debug APK successfully.
 2. Run formatting/static checks used by the base project.
-3. Install on the physical device.
+3. Install on the physical device with `.\scripts\install-debug-owner.ps1`.
 4. Verify that the changed path works on-device.
 5. Check Logcat for unexpected exceptions.
 6. For recording changes, verify the resulting MP4 with normal Android playback.
+
+When a public Kotlin model, constructor, or API used across Gradle module boundaries changes,
+do not install an APK produced only from incremental outputs. Run a clean build of the application
+and its relevant tests before installation so dependent modules cannot retain stale bytecode.
 
 Useful commands from the repository root:
 

@@ -240,6 +240,7 @@ class LinkAudioUiStateTest {
         )
 
         val source = controller.recordingAudioPlan().source as RecordingAudioSource.LinkAudioReady
+        val discardedFrames = source.preparer.prepare()
         val read = source.reader.read(ShortArray(4), 2)
 
         assertThat(source.channelId).isEqualTo(channel.id)
@@ -247,6 +248,8 @@ class LinkAudioUiStateTest {
         assertThat(source.peerName).isEqualTo("Push 3")
         assertThat(source.sampleRate).isEqualTo(48_000)
         assertThat(source.selectionGeneration).isEqualTo(7)
+        assertThat(discardedFrames).isEqualTo(1_024)
+        assertThat(client.discardCount).isEqualTo(1)
         assertThat(read).isInstanceOf(RecordingPcmReadResult.Data::class.java)
         read as RecordingPcmReadResult.Data
         assertThat(read.framesRead).isEqualTo(2)
@@ -322,6 +325,9 @@ class LinkAudioUiStateTest {
         val source = controller.recordingAudioPlan().source as RecordingAudioSource.LinkAudioReady
         client.pcmStatus.value = client.pcmStatus.value.copy(generation = 4)
 
+        val prepareError = runCatching { source.preparer.prepare() }.exceptionOrNull()
+        assertThat(prepareError).isInstanceOf(IllegalStateException::class.java)
+        assertThat(client.discardCount).isEqualTo(0)
         assertThat(source.reader.read(ShortArray(2), 1))
             .isInstanceOf(RecordingPcmReadResult.SourceInvalidated::class.java)
         assertThat(client.readCount).isEqualTo(0)
@@ -389,6 +395,26 @@ class LinkAudioUiStateTest {
 
         assertThat(error).isInstanceOf(CancellationException::class.java)
     }
+
+    @Test
+    fun performIfEnabled_disabledDoesNotInvokeLinkAction() {
+        var invocationCount = 0
+
+        val performed = performIfEnabled(enabled = false) { invocationCount++ }
+
+        assertThat(performed).isFalse()
+        assertThat(invocationCount).isEqualTo(0)
+    }
+
+    @Test
+    fun performIfEnabled_enabledInvokesLinkActionOnce() {
+        var invocationCount = 0
+
+        val performed = performIfEnabled(enabled = true) { invocationCount++ }
+
+        assertThat(performed).isTrue()
+        assertThat(invocationCount).isEqualTo(1)
+    }
 }
 
 private class FakeLinkAudioClient : LinkAudioClientFacade {
@@ -397,12 +423,18 @@ private class FakeLinkAudioClient : LinkAudioClientFacade {
     val selectedChannelIds = mutableListOf<String?>()
     var closed = false
     var readCount = 0
+    var discardCount = 0
+    var discardedFrames = 1_024L
     var nextRead = LinkAudioPcmRead(framesRead = 0, metadata = null)
     var readError: Exception? = null
 
     override fun setEnabled(enabled: Boolean) = Unit
     override fun selectChannel(channelId: String?) {
         selectedChannelIds += channelId
+    }
+    override suspend fun discardBufferedPcmFrames(): Long {
+        discardCount++
+        return discardedFrames
     }
     override suspend fun readPcmFrames(destination: ShortArray, maxFrames: Int): LinkAudioPcmRead {
         readCount++

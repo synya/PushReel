@@ -4,6 +4,7 @@
  */
 #pragma once
 
+#include <algorithm>
 #include <array>
 #include <cmath>
 #include <cstdint>
@@ -22,6 +23,193 @@ struct BufferTimingIdentity {
     return lhs.count == rhs.count && lhs.sessionId == rhs.sessionId
            && lhs.bufferFrames == rhs.bufferFrames && lhs.sampleRate == rhs.sampleRate;
   }
+};
+
+inline bool addFrameOffsetUs(std::int64_t bufferBeginUs,
+                             std::uint32_t frameOffset,
+                             std::uint32_t bufferFrames,
+                             std::uint32_t sampleRate,
+                             std::int64_t& result) noexcept;
+
+struct FallbackTimingResult {
+  std::int64_t bufferBeginRawUs{};
+  bool active{};
+  bool entered{};
+  bool reanchored{};
+  bool countDiscontinuity{};
+};
+
+// Repairs streams whose sender keeps publishing an obviously stale Link beat anchor. Once
+// entered, timing advances by the exact PCM duration. Receipt time is used only to establish a
+// new epoch on entry or when the session/format changes; it is never followed packet by packet.
+class FallbackTimingNormalizer {
+ public:
+  explicit FallbackTimingNormalizer(
+      const std::int64_t staleThresholdUs = 2'000'000) noexcept
+      : staleThresholdUs_(staleThresholdUs) {}
+
+  FallbackTimingResult normalize(const BufferTimingIdentity& identity,
+                                 const std::int64_t metadataBeginRawUs,
+                                 const std::int64_t receivedRawUs) noexcept {
+    const auto lateness = static_cast<long double>(receivedRawUs)
+                          - static_cast<long double>(metadataBeginRawUs);
+    const auto stale = staleThresholdUs_ >= 0
+                       && lateness > static_cast<long double>(staleThresholdUs_);
+    if (!active_ && !stale) {
+      return {metadataBeginRawUs, false, false, false, false};
+    }
+
+    // A failed clock conversion may retry a later partial read of this same buffer.
+    // Keep its original anchor instead of advancing by an entire buffer twice.
+    if (active_ && previousIdentity_ == identity) {
+      return {previousBeginRawUs_, true, false, false, false};
+    }
+
+    const auto entered = !active_;
+    const auto sameFormat = active_ && previousIdentity_.sessionId == identity.sessionId
+                            && previousIdentity_.sampleRate == identity.sampleRate;
+    const auto countContinuous = sameFormat
+                                 && identity.count == previousIdentity_.count + std::uint64_t{1};
+    const auto reanchored = entered || !sameFormat;
+    auto beginRawUs = sameFormat ? previousExpectedEndRawUs_ : receivedRawUs;
+    if (active_ && beginRawUs < previousExpectedEndRawUs_) {
+      beginRawUs = previousExpectedEndRawUs_;
+    }
+
+    std::int64_t expectedEndRawUs{};
+    if (!addFrameOffsetUs(beginRawUs,
+                          identity.bufferFrames,
+                          identity.bufferFrames,
+                          identity.sampleRate,
+                          expectedEndRawUs)) {
+      reset();
+      return {metadataBeginRawUs, false, false, false, false};
+    }
+    active_ = true;
+    previousIdentity_ = identity;
+    previousBeginRawUs_ = beginRawUs;
+    previousExpectedEndRawUs_ = expectedEndRawUs;
+    return {beginRawUs,
+            true,
+            entered,
+            reanchored,
+            sameFormat && !countContinuous};
+  }
+
+  void reset() noexcept {
+    active_ = false;
+    previousIdentity_ = {};
+    previousBeginRawUs_ = 0;
+    previousExpectedEndRawUs_ = 0;
+  }
+
+ private:
+  BufferTimingIdentity previousIdentity_{};
+  std::int64_t previousBeginRawUs_{};
+  std::int64_t previousExpectedEndRawUs_{};
+  std::int64_t staleThresholdUs_{};
+  bool active_{};
+};
+
+struct TimingDiagnosticsSnapshot {
+  std::uint64_t timedBufferCount{};
+  std::int64_t latestPresentationLatenessUs{};
+  std::int64_t minPresentationLatenessUs{};
+  std::int64_t maxPresentationLatenessUs{};
+  std::uint64_t interBufferTimingCount{};
+  std::int64_t latestInterBufferDeltaUs{};
+  std::int64_t minInterBufferDeltaUs{};
+  std::int64_t maxInterBufferDeltaUs{};
+  std::uint64_t bufferCountDiscontinuityCount{};
+  std::uint64_t timestampDiscontinuityCount{};
+};
+
+// Access must be serialized by the owner. Observations are made once per Link buffer on the
+// non-realtime JNI reader thread, never in the Link Audio callback.
+class TimingDiagnostics {
+ public:
+  static constexpr std::int64_t kTimestampDiscontinuityThresholdUs = 5'000;
+
+  void observe(const BufferTimingIdentity& identity,
+               const std::int64_t bufferBeginRawUs,
+               const std::int64_t receivedRawUs) noexcept {
+    const auto latenessUs = receivedRawUs - bufferBeginRawUs;
+    latestPresentationLatenessUs_ = latenessUs;
+    if (timedBufferCount_ == 0) {
+      minPresentationLatenessUs_ = latenessUs;
+      maxPresentationLatenessUs_ = latenessUs;
+    } else {
+      minPresentationLatenessUs_ = std::min(minPresentationLatenessUs_, latenessUs);
+      maxPresentationLatenessUs_ = std::max(maxPresentationLatenessUs_, latenessUs);
+    }
+    ++timedBufferCount_;
+
+    const auto sameStream = hasPreviousBuffer_
+                            && previousIdentity_.sessionId == identity.sessionId
+                            && previousIdentity_.sampleRate == identity.sampleRate;
+    if (sameStream) {
+      if (identity.count != previousIdentity_.count + std::uint64_t{1}) {
+        ++bufferCountDiscontinuityCount_;
+      }
+      const auto deltaUs = bufferBeginRawUs - previousExpectedEndRawUs_;
+      latestInterBufferDeltaUs_ = deltaUs;
+      if (interBufferTimingCount_ == 0) {
+        minInterBufferDeltaUs_ = deltaUs;
+        maxInterBufferDeltaUs_ = deltaUs;
+      } else {
+        minInterBufferDeltaUs_ = std::min(minInterBufferDeltaUs_, deltaUs);
+        maxInterBufferDeltaUs_ = std::max(maxInterBufferDeltaUs_, deltaUs);
+      }
+      ++interBufferTimingCount_;
+      if (deltaUs < -kTimestampDiscontinuityThresholdUs
+          || deltaUs > kTimestampDiscontinuityThresholdUs) {
+        ++timestampDiscontinuityCount_;
+      }
+    }
+
+    std::int64_t expectedEndRawUs{};
+    if (addFrameOffsetUs(bufferBeginRawUs,
+                         identity.bufferFrames,
+                         identity.bufferFrames,
+                         identity.sampleRate,
+                         expectedEndRawUs)) {
+      previousIdentity_ = identity;
+      previousExpectedEndRawUs_ = expectedEndRawUs;
+      hasPreviousBuffer_ = true;
+    } else {
+      hasPreviousBuffer_ = false;
+    }
+  }
+
+  TimingDiagnosticsSnapshot snapshot() const noexcept {
+    return TimingDiagnosticsSnapshot{timedBufferCount_,
+                                     latestPresentationLatenessUs_,
+                                     minPresentationLatenessUs_,
+                                     maxPresentationLatenessUs_,
+                                     interBufferTimingCount_,
+                                     latestInterBufferDeltaUs_,
+                                     minInterBufferDeltaUs_,
+                                     maxInterBufferDeltaUs_,
+                                     bufferCountDiscontinuityCount_,
+                                     timestampDiscontinuityCount_};
+  }
+
+  void reset() noexcept { *this = TimingDiagnostics{}; }
+
+ private:
+  BufferTimingIdentity previousIdentity_{};
+  std::int64_t previousExpectedEndRawUs_{};
+  std::uint64_t timedBufferCount_{};
+  std::uint64_t interBufferTimingCount_{};
+  std::uint64_t bufferCountDiscontinuityCount_{};
+  std::uint64_t timestampDiscontinuityCount_{};
+  std::int64_t latestPresentationLatenessUs_{};
+  std::int64_t minPresentationLatenessUs_{};
+  std::int64_t maxPresentationLatenessUs_{};
+  std::int64_t latestInterBufferDeltaUs_{};
+  std::int64_t minInterBufferDeltaUs_{};
+  std::int64_t maxInterBufferDeltaUs_{};
+  bool hasPreviousBuffer_{};
 };
 
 // Access must be serialized by the owner. Keeping this type lock-free makes it usable in host

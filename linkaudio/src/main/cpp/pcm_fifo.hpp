@@ -29,6 +29,7 @@ class BasicPcmFifo {
     double sessionBeatTime{};
     double tempo{};
     std::array<std::uint8_t, 8> sessionId{};
+    std::int64_t receivedRawUs{};
   };
 
   struct ReadResult {
@@ -170,6 +171,33 @@ class BasicPcmFifo {
       descriptorReadIndex_.store(descriptorRead + 1, std::memory_order_release);
     }
     return result;
+  }
+
+  // Discards every descriptor committed before this call. This is a consumer operation and must
+  // be serialized with read(). The producer can continue publishing without taking a lock.
+  std::uint32_t discardBufferedFrames() noexcept {
+    const auto descriptorRead = descriptorReadIndex_.load(std::memory_order_relaxed);
+    const auto descriptorWrite = descriptorWriteIndex_.load(std::memory_order_acquire);
+    if (descriptorRead == descriptorWrite) return 0;
+    if (descriptorWrite - descriptorRead > kDescriptorCapacity) {
+      invalidBufferCount_.fetch_add(1, std::memory_order_relaxed);
+      return 0;
+    }
+
+    // Do not use writeIndex_ as the target. The producer advances it before committing the
+    // descriptor, so it can temporarily include an in-flight buffer that must remain readable.
+    const auto& last = descriptors_[(descriptorWrite - 1) & kDescriptorMask];
+    const auto targetRead = last.startFrame + last.frames;
+    const auto read = readIndex_.load(std::memory_order_relaxed);
+    const auto discarded = targetRead - read;
+    if (discarded > kCapacityFrames) {
+      invalidBufferCount_.fetch_add(1, std::memory_order_relaxed);
+      return 0;
+    }
+
+    readIndex_.store(targetRead, std::memory_order_release);
+    descriptorReadIndex_.store(descriptorWrite, std::memory_order_release);
+    return discarded;
   }
 
   Status status() const noexcept {

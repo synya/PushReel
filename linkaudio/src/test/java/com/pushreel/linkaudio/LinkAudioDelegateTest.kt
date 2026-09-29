@@ -148,6 +148,30 @@ class LinkAudioDelegateTest {
     }
 
     @Test
+    fun discardAndPcmReadAreSerializedThroughActor() = runTest {
+        val native = FakeNativeBridge().apply { discardedFrames = 12_345L }
+        val delegate = createDelegate(native)
+        runCurrent()
+        native.operations.clear()
+
+        val discarded = async(start = CoroutineStart.UNDISPATCHED) {
+            delegate.discardBufferedPcmFrames()
+        }
+        val read = async(start = CoroutineStart.UNDISPATCHED) {
+            delegate.readPcmFrames(ShortArray(2), 1)
+        }
+        runCurrent()
+
+        assertThat(discarded.await()).isEqualTo(12_345L)
+        assertThat(read.await().framesRead).isEqualTo(0)
+        assertThat(native.operations)
+            .containsExactly("discard", "audio-status", "read:1", "audio-status")
+            .inOrder()
+        delegate.close()
+        runCurrent()
+    }
+
+    @Test
     fun cancellationDoesNotReleaseDestinationBeforeNativeReadCompletes() = runTest {
         val native = FakeNativeBridge()
         val delegate = createDelegate(native)
@@ -186,6 +210,23 @@ class LinkAudioDelegateTest {
         assertThat(read.await()).isEqualTo(LinkAudioPcmRead(framesRead = 0, metadata = null))
         assertThat(native.operations).doesNotContain("read:1")
         assertThat(destination.asList()).containsExactly(0.toShort(), 0.toShort())
+    }
+
+    @Test
+    fun closeDrainsQueuedDiscardWithoutCallingNative() = runTest {
+        val native = FakeNativeBridge()
+        val delegate = createDelegate(native)
+        runCurrent()
+        native.operations.clear()
+        val discard = async(start = CoroutineStart.UNDISPATCHED) {
+            delegate.discardBufferedPcmFrames()
+        }
+
+        delegate.close()
+        runCurrent()
+
+        assertThat(discard.await()).isEqualTo(0L)
+        assertThat(native.operations).doesNotContain("discard")
     }
 
     @Test
@@ -283,6 +324,7 @@ private class FakeNativeBridge : NativeBridge {
     var failChannels = false
     var disableFailuresRemaining = 0
     var readResult: LongArray? = null
+    var discardedFrames = 0L
 
     override fun create(peerNameUtf8: ByteArray): Long {
         operations += "create"
@@ -329,9 +371,17 @@ private class FakeNativeBridge : NativeBridge {
         return readResult
     }
 
+    override fun discardBufferedAudio(handle: Long): Long {
+        operations += "discard"
+        return discardedFrames
+    }
+
     override fun getAudioStatus(handle: Long): LongArray {
         operations += "audio-status"
-        return longArrayOf(0, 0, 2, 0, 96_000, 0, 0, 0, 0, 0, 0, 0)
+        return LongArray(22).also { values ->
+            values[2] = 2
+            values[4] = 96_000
+        }
     }
 }
 

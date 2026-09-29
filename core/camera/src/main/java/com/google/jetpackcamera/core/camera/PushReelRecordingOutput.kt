@@ -40,6 +40,28 @@ internal data class PendingMuxerSample(
     val isKeyFrame: Boolean = false
 )
 
+/** Bounded queue that only releases AAC whose PTS has been reached by encoded video. */
+internal class AudioCommitQueue(private val capacity: Int) {
+    private val pending = ArrayDeque<EncodedAudioSample>()
+
+    fun add(sample: EncodedAudioSample) {
+        check(pending.size < capacity) { "Encoded audio commit queue overflow" }
+        pending.addLast(sample)
+    }
+
+    fun takeThrough(videoPresentationTimeUs: Long): List<EncodedAudioSample> {
+        val ready = mutableListOf<EncodedAudioSample>()
+        while (
+            pending.firstOrNull()?.presentationTimeUs?.let { it <= videoPresentationTimeUs } == true
+        ) {
+            ready += pending.removeFirst()
+        }
+        return ready
+    }
+
+    fun discardRemaining(): Int = pending.size.also { pending.clear() }
+}
+
 /** Bounded pre-start gate that retains the first requested keyframe until both formats exist. */
 internal class MuxerStartGate(private val capacity: Int) {
     private val pending = ArrayDeque<PendingMuxerSample>()
@@ -139,12 +161,14 @@ internal class PushReelRecordingOutput private constructor(
     private val timeline = MuxerSampleTimeline()
     private val startGate = MuxerStartGate(PRE_START_SAMPLE_CAPACITY)
     private val pendingSamples = linkedMapOf<PendingMuxerSample, ArrayDeque<OwnedSample>>()
+    private val audioCommitQueue = AudioCommitQueue(AUDIO_COMMIT_SAMPLE_CAPACITY)
     private var videoTrack = -1
     private var audioTrack = -1
     private var started = false
     private var closed = false
     private var wroteVideo = false
     private var wroteAudio = false
+    private var lastWrittenVideoSourceUs: Long? = null
     private var terminalState = TerminalState.ACTIVE
 
     fun setOrientationHint(rotationDegrees: Int) {
@@ -180,6 +204,8 @@ internal class PushReelRecordingOutput private constructor(
         }
         muxer.writeSampleData(videoTrack, ByteBuffer.wrap(sample.data), info)
         wroteVideo = true
+        lastWrittenVideoSourceUs = sample.presentationTimeUs
+        flushAudioThrough(sample.presentationTimeUs)
     }
 
     fun writeAudio(sample: EncodedAudioSample) {
@@ -191,6 +217,15 @@ internal class PushReelRecordingOutput private constructor(
     }
 
     private fun writeAudioStarted(sample: EncodedAudioSample) {
+        audioCommitQueue.add(sample)
+        lastWrittenVideoSourceUs?.let(::flushAudioThrough)
+    }
+
+    private fun flushAudioThrough(videoPresentationTimeUs: Long) {
+        audioCommitQueue.takeThrough(videoPresentationTimeUs).forEach(::writeCommittedAudio)
+    }
+
+    private fun writeCommittedAudio(sample: EncodedAudioSample) {
         val decision = timeline.audio(sample.presentationTimeUs)
         if (!decision.write) return
         val info = MediaCodec.BufferInfo().apply {
@@ -203,6 +238,8 @@ internal class PushReelRecordingOutput private constructor(
     fun commit() {
         if (terminalState == TerminalState.COMMITTED) return
         check(terminalState == TerminalState.ACTIVE) { "Recording output was aborted" }
+        lastWrittenVideoSourceUs?.let(::flushAudioThrough)
+        audioCommitQueue.discardRemaining()
         check(wroteVideo) { "Recording ended before a video keyframe was written" }
         check(wroteAudio) { "Recording ended before AAC audio was written" }
         closeMuxer()
@@ -259,6 +296,7 @@ internal class PushReelRecordingOutput private constructor(
 
     companion object {
         private const val PRE_START_SAMPLE_CAPACITY = 96
+        private const val AUDIO_COMMIT_SAMPLE_CAPACITY = 512
 
         fun create(
             resolver: ContentResolver,

@@ -33,6 +33,7 @@ sealed interface RecordingAudioSource {
         val sampleRate: Int,
         val channelCount: Int,
         val selectionGeneration: Long,
+        val preparer: RecordingPcmPreparer,
         val reader: RecordingPcmReader
     ) : RecordingAudioSource
 
@@ -58,6 +59,12 @@ enum class LinkAudioUnavailableReason {
  */
 fun interface RecordingPcmReader {
     suspend fun read(destination: ShortArray, maxFrames: Int): RecordingPcmReadResult
+}
+
+/** Prepares the selected PCM stream immediately before its recording time origin is captured. */
+fun interface RecordingPcmPreparer {
+    /** Returns the number of buffered frames discarded before recording. */
+    suspend fun prepare(): Long
 }
 
 sealed interface RecordingPcmReadResult {

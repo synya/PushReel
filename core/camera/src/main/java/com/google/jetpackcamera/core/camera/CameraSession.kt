@@ -1219,6 +1219,9 @@ private suspend fun startVideoRecordingInternal(
         when (onVideoRecordEvent) {
             is VideoRecordEvent.Start -> {
                 currentCameraState.update { old ->
+                    if (old.videoRecordingState is VideoRecordingState.Active.Stopping) {
+                        return@update old
+                    }
                     old.copy(
                         videoRecordingState = VideoRecordingState.Active.Recording(
                             audioStreamState = onVideoRecordEvent.recordingStats.audioStats
@@ -1233,6 +1236,9 @@ private suspend fun startVideoRecordingInternal(
 
             is VideoRecordEvent.Pause -> {
                 currentCameraState.update { old ->
+                    if (old.videoRecordingState is VideoRecordingState.Active.Stopping) {
+                        return@update old
+                    }
                     old.copy(
                         videoRecordingState = VideoRecordingState.Active.Paused(
                             audioStreamState = onVideoRecordEvent.recordingStats.audioStats
@@ -1247,6 +1253,9 @@ private suspend fun startVideoRecordingInternal(
 
             is VideoRecordEvent.Resume -> {
                 currentCameraState.update { old ->
+                    if (old.videoRecordingState is VideoRecordingState.Active.Stopping) {
+                        return@update old
+                    }
                     old.copy(
                         videoRecordingState = VideoRecordingState.Active.Recording(
                             audioStreamState = onVideoRecordEvent.recordingStats.audioStats
@@ -1261,6 +1270,9 @@ private suspend fun startVideoRecordingInternal(
 
             is VideoRecordEvent.Status -> {
                 currentCameraState.update { old ->
+                    if (old.videoRecordingState is VideoRecordingState.Active.Stopping) {
+                        return@update old
+                    }
                     // don't want to change state from paused to recording if status changes while paused
                     if (old.videoRecordingState is VideoRecordingState.Active.Paused) {
                         old.copy(
@@ -1495,6 +1507,9 @@ internal suspend fun processPushReelVideoControlEvents(videoOutput: PushReelMedi
                         delay(250)
                         val elapsedNanos = SystemClock.elapsedRealtimeNanos() - startedNanos
                         currentCameraState.update { old ->
+                            if (old.videoRecordingState is VideoRecordingState.Active.Stopping) {
+                                return@update old
+                            }
                             old.copy(
                                 videoRecordingState = VideoRecordingState.Active.Recording(
                                     maxDurationMillis = event.maxVideoDuration,
@@ -1512,7 +1527,15 @@ internal suspend fun processPushReelVideoControlEvents(videoOutput: PushReelMedi
                         videoOutput = videoOutput,
                         audioSource = source,
                         dispatcher = backgroundDispatcher
-                    ).recordUntilStopped(videoCaptureControlEvents, event.maxVideoDuration)
+                    ).recordUntilStopped(
+                        controlEvents = videoCaptureControlEvents,
+                        maxDurationMillis = event.maxVideoDuration,
+                        onStopping = { elapsedTimeNanos ->
+                            currentCameraState.update { old ->
+                                old.withVideoRecordingStopping(elapsedTimeNanos)
+                            }
+                        }
+                    )
                 } finally {
                     statusJob.cancelAndJoin()
                 }
@@ -1532,6 +1555,7 @@ internal suspend fun processPushReelVideoControlEvents(videoOutput: PushReelMedi
                 deliver(OnVideoRecordEvent.OnVideoRecordError(error))
                 throw error
             } catch (error: Throwable) {
+                Log.e(TAG, "PushReel recording failed", error)
                 currentCameraState.update { old ->
                     old.copy(videoRecordingState = VideoRecordingState.Inactive())
                 }

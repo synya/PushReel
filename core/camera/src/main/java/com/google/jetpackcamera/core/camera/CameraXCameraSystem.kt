@@ -98,6 +98,8 @@ import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 
 private const val TAG = "CameraXCameraSystem"
@@ -130,6 +132,7 @@ class CameraXCameraSystem(
     private val focusMeteringEvents =
         Channel<CameraEvent.FocusMeteringEvent>(capacity = Channel.CONFLATED)
     private val videoCaptureControlEvents = Channel<VideoCaptureControlEvent>()
+    private val videoRecordingControlGate = VideoRecordingControlGate()
     private val recordingBackendCoordinator = RecordingBackendSessionCoordinator()
 
     private val currentSettings = MutableStateFlow<CameraAppSettings?>(null)
@@ -691,26 +694,26 @@ class CameraXCameraSystem(
                 require(Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                     "Link Audio recording requires Android 10 or newer"
                 }
-                throw IllegalStateException(
-                    "Link Audio MP4 recording is awaiting physical-device tail-flush validation"
-                )
+                RecordingBackendIdentity.PUSHREEL_MEDIA_CODEC
             }
             is RecordingAudioSource.LinkAudioUnavailable -> throw IllegalStateException(
                 "Link Audio is unavailable: ${audioSource.reason}"
             )
         }
-        val requestedBinding = recordingBackendCoordinator.request(requiredBackend)
-        recordingBackendCoordinator.awaitBound(requestedBinding)
-        currentCoroutineContext().ensureActive()
-        videoCaptureControlEvents.send(
-            VideoCaptureControlEvent.StartRecordingEvent(
-                saveLocation,
-                currentSettings.value?.maxVideoDurationMillis
-                    ?: UNLIMITED_VIDEO_DURATION,
-                audioPlan = audioPlan,
-                onVideoRecord = onVideoRecord
+        videoRecordingControlGate.start {
+            val requestedBinding = recordingBackendCoordinator.request(requiredBackend)
+            recordingBackendCoordinator.awaitBound(requestedBinding)
+            currentCoroutineContext().ensureActive()
+            videoCaptureControlEvents.send(
+                VideoCaptureControlEvent.StartRecordingEvent(
+                    saveLocation,
+                    currentSettings.value?.maxVideoDurationMillis
+                        ?: UNLIMITED_VIDEO_DURATION,
+                    audioPlan = audioPlan,
+                    onVideoRecord = onVideoRecord
+                )
             )
-        )
+        }
     }
 
     override suspend fun pauseVideoRecording() {
@@ -722,7 +725,13 @@ class CameraXCameraSystem(
     }
 
     override suspend fun stopVideoRecording() {
-        videoCaptureControlEvents.send(VideoCaptureControlEvent.StopRecordingEvent)
+        val accepted = videoRecordingControlGate.stop {
+            currentCameraState.update { old -> old.withVideoRecordingStopping() }
+            videoCaptureControlEvents.send(VideoCaptureControlEvent.StopRecordingEvent)
+        }
+        if (!accepted) {
+            Log.d(TAG, "Ignoring duplicate stopVideoRecording request")
+        }
     }
 
     override fun changeZoomRatio(newZoomState: CameraZoomRatio) {
@@ -1133,5 +1142,29 @@ class CameraXCameraSystem(
         }
 
         private val FIXED_FRAME_RATES = setOf(TARGET_FPS_15, TARGET_FPS_30, TARGET_FPS_60)
+    }
+}
+
+internal class VideoRecordingControlGate {
+    private val mutex = Mutex()
+    private var latestGeneration = 0L
+    private var activeGeneration: Long? = null
+    private var stoppedGeneration: Long? = null
+
+    suspend fun start(startAction: suspend (generation: Long) -> Unit): Long = mutex.withLock {
+        val generation = latestGeneration + 1
+        startAction(generation)
+        latestGeneration = generation
+        activeGeneration = generation
+        stoppedGeneration = null
+        generation
+    }
+
+    suspend fun stop(stopAction: suspend (generation: Long) -> Unit): Boolean = mutex.withLock {
+        val generation = activeGeneration ?: return@withLock false
+        if (stoppedGeneration == generation) return@withLock false
+        stopAction(generation)
+        stoppedGeneration = generation
+        true
     }
 }

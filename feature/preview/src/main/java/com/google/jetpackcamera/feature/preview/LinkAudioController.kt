@@ -20,6 +20,7 @@ import com.google.jetpackcamera.model.LinkAudioUnavailableReason
 import com.google.jetpackcamera.model.RecordingAudioPlan
 import com.google.jetpackcamera.model.RecordingAudioSource
 import com.google.jetpackcamera.model.RecordingPcmBufferMetadata
+import com.google.jetpackcamera.model.RecordingPcmPreparer
 import com.google.jetpackcamera.model.RecordingPcmReadResult
 import com.google.jetpackcamera.model.RecordingPcmReader
 import com.pushreel.linkaudio.LinkAudioChannel
@@ -155,6 +156,16 @@ class DefaultLinkAudioController internal constructor(
         }
         checkNotNull(channel)
         val generation = pcmStatus.generation
+        val preparer = RecordingPcmPreparer {
+            check(client.matchesSelection(channel.id, generation)) {
+                "Link Audio channel selection changed before recording"
+            }
+            val discardedFrames = client.discardBufferedPcmFrames()
+            check(client.matchesSelection(channel.id, generation)) {
+                "Link Audio channel selection changed while preparing recording"
+            }
+            discardedFrames
+        }
         val reader = RecordingPcmReader { destination, maxFrames ->
             if (!client.matchesSelection(channel.id, generation)) {
                 RecordingPcmReadResult.SourceInvalidated(
@@ -186,6 +197,7 @@ class DefaultLinkAudioController internal constructor(
                 sampleRate = pcmStatus.sampleRate,
                 channelCount = pcmStatus.channelCount,
                 selectionGeneration = generation,
+                preparer = preparer,
                 reader = reader
             )
         )
@@ -202,6 +214,7 @@ internal interface LinkAudioClientFacade : Closeable {
     val pcmStatus: StateFlow<LinkAudioPcmStatus>
     fun setEnabled(enabled: Boolean)
     fun selectChannel(channelId: String?)
+    suspend fun discardBufferedPcmFrames(): Long
     suspend fun readPcmFrames(destination: ShortArray, maxFrames: Int): LinkAudioPcmRead
 }
 
@@ -212,6 +225,7 @@ private class AndroidLinkAudioClient(
     override val pcmStatus: StateFlow<LinkAudioPcmStatus> = client.pcmStatus
     override fun setEnabled(enabled: Boolean) = client.setEnabled(enabled)
     override fun selectChannel(channelId: String?) = client.selectChannel(channelId)
+    override suspend fun discardBufferedPcmFrames(): Long = client.discardBufferedPcmFrames()
     override suspend fun readPcmFrames(destination: ShortArray, maxFrames: Int): LinkAudioPcmRead =
         client.readPcmFrames(destination, maxFrames)
     override fun close() = client.close()

@@ -57,7 +57,30 @@ class LinkAudioModelsTest {
     @Test
     fun decodePcmStatus_mapsDiagnostics() {
         val status = decodePcmStatus(
-            longArrayOf(1, 48_000, 2, 512, 96_000, 1_024, 512, 64, 2, 128, 1, 3)
+            longArrayOf(
+                1,
+                48_000,
+                2,
+                512,
+                96_000,
+                1_024,
+                512,
+                64,
+                2,
+                128,
+                1,
+                3,
+                20,
+                180_000,
+                120_000,
+                240_000,
+                19,
+                681_000,
+                -750,
+                681_000,
+                2,
+                1
+            )
         )
 
         assertThat(status.channelSelected).isTrue()
@@ -67,6 +90,16 @@ class LinkAudioModelsTest {
         assertThat(status.overflowCount).isEqualTo(2)
         assertThat(status.underrunFrames).isEqualTo(128)
         assertThat(status.invalidBufferCount).isEqualTo(3)
+        assertThat(status.timedBufferCount).isEqualTo(20)
+        assertThat(status.latestPresentationLatenessUs).isEqualTo(180_000)
+        assertThat(status.minPresentationLatenessUs).isEqualTo(120_000)
+        assertThat(status.maxPresentationLatenessUs).isEqualTo(240_000)
+        assertThat(status.interBufferTimingCount).isEqualTo(19)
+        assertThat(status.latestInterBufferDeltaUs).isEqualTo(681_000)
+        assertThat(status.minInterBufferDeltaUs).isEqualTo(-750)
+        assertThat(status.maxInterBufferDeltaUs).isEqualTo(681_000)
+        assertThat(status.bufferCountDiscontinuityCount).isEqualTo(2)
+        assertThat(status.timestampDiscontinuityCount).isEqualTo(1)
     }
 
     @Test

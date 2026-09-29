@@ -23,6 +23,58 @@ import org.junit.Test
 
 class PushReelRecordingSessionTest {
     @Test
+    fun videoTimestampOffset_realtimeNeedsNoConversion() {
+        assertThat(
+            videoTimestampOffsetUs(
+                timebase = Timebase.REALTIME,
+                samples = emptyList()
+            )
+        ).isEqualTo(0)
+    }
+
+    @Test
+    fun videoTimestampOffset_uptimeMapsIntoElapsedRealtime() {
+        assertThat(
+            videoTimestampOffsetUs(
+                timebase = Timebase.UPTIME,
+                samples = listOf(
+                    TimebaseOffsetSample(
+                        elapsedRealtimeBeforeUs = 15_000_000,
+                        uptimeUs = 12_000_000,
+                        elapsedRealtimeAfterUs = 15_000_000
+                    )
+                )
+            )
+        ).isEqualTo(3_000_000)
+    }
+
+    @Test
+    fun videoTimestampOffset_choosesTightestElapsedRealtimeBracket() {
+        val elapsedReadings = ArrayDeque(
+            listOf(
+                15_000_000L,
+                15_000_200L,
+                20_000_000L,
+                20_000_040L,
+                25_000_000L,
+                25_000_100L
+            )
+        )
+        val uptimeReadings = ArrayDeque(listOf(12_000_000L, 17_000_020L, 22_000_000L))
+
+        assertThat(
+            sampleVideoTimestampOffsetUs(
+                timebase = Timebase.UPTIME,
+                elapsedRealtimeUs = { elapsedReadings.removeFirst() },
+                uptimeUs = { uptimeReadings.removeFirst() },
+                attempts = 3
+            )
+        ).isEqualTo(3_000_000)
+        assertThat(elapsedReadings).isEmpty()
+        assertThat(uptimeReadings).isEmpty()
+    }
+
+    @Test
     fun pcmWindow_straddlingOrigin_trimsWholeFramesAndUsesSharedClock() {
         val window = pcmWindowAfterOrigin(
             metadata(firstFrameUs = 990_000, sampleRate = 48_000),
@@ -59,6 +111,102 @@ class PushReelRecordingSessionTest {
         )
 
         assertThat(window).isEqualTo(PcmWindow(0, 240, 25_000))
+    }
+
+    @Test
+    fun pcmWindowAtCutoff_trimsFinalWindowExactlyAtStop() {
+        val selection = pcmWindowAtCutoff(
+            metadata(firstFrameUs = 1_000_000, sampleRate = 48_000),
+            framesRead = 960,
+            originElapsedRealtimeUs = 990_000,
+            cutoffElapsedRealtimeUs = 1_012_500
+        )
+
+        assertThat(selection).isEqualTo(
+            PcmWindowAtCutoff(
+                window = PcmWindow(0, 600, 10_000),
+                reachedCutoff = true
+            )
+        )
+    }
+
+    @Test
+    fun pcmWindowAtCutoff_beforeFinalWindow_keepsReading() {
+        val selection = pcmWindowAtCutoff(
+            metadata(firstFrameUs = 1_000_000, sampleRate = 48_000),
+            framesRead = 480,
+            originElapsedRealtimeUs = 1_000_000,
+            cutoffElapsedRealtimeUs = 1_020_000
+        )
+
+        assertThat(selection.window).isEqualTo(PcmWindow(0, 480, 0))
+        assertThat(selection.reachedCutoff).isFalse()
+    }
+
+    @Test
+    fun pcmWindowAtCutoff_excludesFrameExactlyAtStop() {
+        val selection = pcmWindowAtCutoff(
+            metadata(firstFrameUs = 1_000_000, sampleRate = 1_000),
+            framesRead = 10,
+            originElapsedRealtimeUs = 1_000_000,
+            cutoffElapsedRealtimeUs = 1_005_000
+        )
+
+        assertThat(selection.window).isEqualTo(PcmWindow(0, 5, 0))
+        assertThat(selection.reachedCutoff).isTrue()
+    }
+
+    @Test
+    fun stalePcmFastForward_largeBacklogYieldsInBoundedBatches() {
+        val fastForward = StalePcmFastForward(readsPerYield = 128)
+        val stale = PcmWindowAtCutoff(window = null, reachedCutoff = false)
+
+        val yieldCount = (1..5_513).count { fastForward.onSelection(stale) }
+
+        assertThat(yieldCount).isEqualTo(43)
+    }
+
+    @Test
+    fun stalePcmFastForward_currentPcmEndsFastForwardAndPreservesLinkPts() {
+        val fastForward = StalePcmFastForward(readsPerYield = 2)
+        val stale = PcmWindowAtCutoff(window = null, reachedCutoff = false)
+        val current = pcmWindowAtCutoff(
+            metadata(firstFrameUs = 1_025_000, sampleRate = 48_000),
+            framesRead = 240,
+            originElapsedRealtimeUs = 1_000_000,
+            cutoffElapsedRealtimeUs = null
+        )
+
+        assertThat(fastForward.onSelection(stale)).isFalse()
+        assertThat(fastForward.onSelection(stale)).isTrue()
+        assertThat(fastForward.onSelection(current)).isFalse()
+        assertThat(current.window).isEqualTo(PcmWindow(0, 240, 25_000))
+
+        // Current PCM reset the stale-read batch rather than inheriting its yield position.
+        assertThat(fastForward.onSelection(stale)).isFalse()
+    }
+
+    @Test
+    fun audioCommitQueue_holdsFutureAudioAndDiscardsTail() {
+        val queue = AudioCommitQueue(capacity = 3)
+        val first = audioSample(1_000)
+        val second = audioSample(2_000)
+        val future = audioSample(3_000)
+        queue.add(first)
+        queue.add(second)
+        queue.add(future)
+
+        assertThat(queue.takeThrough(2_000)).containsExactly(first, second).inOrder()
+        assertThat(queue.discardRemaining()).isEqualTo(1)
+        assertThat(queue.takeThrough(Long.MAX_VALUE)).isEmpty()
+    }
+
+    @Test
+    fun audioCommitQueue_overflowFailsExplicitly() {
+        val queue = AudioCommitQueue(capacity = 1)
+        queue.add(audioSample(1_000))
+
+        assertThrows(IllegalStateException::class.java) { queue.add(audioSample(2_000)) }
     }
 
     @Test
@@ -165,5 +313,11 @@ class PushReelRecordingSessionTest {
         bufferFrames = 960,
         offsetFrames = 0,
         firstFrameElapsedRealtimeUs = firstFrameUs
+    )
+
+    private fun audioSample(presentationTimeUs: Long) = EncodedAudioSample(
+        data = byteArrayOf(1),
+        presentationTimeUs = presentationTimeUs,
+        flags = 0
     )
 }

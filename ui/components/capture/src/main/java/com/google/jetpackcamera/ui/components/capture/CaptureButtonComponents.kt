@@ -278,6 +278,7 @@ internal fun CaptureButton(
                     CaptureButtonUiState.Enabled.Recording.LockedRecording -> onStopRecording()
                     CaptureButtonUiState.Enabled.Recording.Starting,
                     CaptureButtonUiState.Enabled.Recording.PressedRecording,
+                    CaptureButtonUiState.Saving,
                     CaptureButtonUiState.Unavailable -> {
                     }
                 }
@@ -678,6 +679,7 @@ private fun CaptureButtonNucleus(
                 (captureButtonSize * pressedVideoCaptureScale).dp
 
             CaptureButtonUiState.Unavailable -> 0.dp
+            CaptureButtonUiState.Saving -> (captureButtonSize * idleVideoCaptureScale).dp
             is CaptureButtonUiState.Enabled.Idle -> when (uiState.captureMode) {
                 // no inner circle will be visible on STANDARD
                 CaptureMode.STANDARD -> 0.dp
@@ -704,6 +706,7 @@ private fun CaptureButtonNucleus(
             }
 
             is CaptureButtonUiState.Enabled.Recording -> recordingColor
+            CaptureButtonUiState.Saving -> recordingColor
             is CaptureButtonUiState.Unavailable -> Color.Transparent
         },
         animationSpec = if (disableAnimations) snap() else tween(durationMillis = 500)

@@ -3,13 +3,20 @@
 PushReel is being developed as an Android camera app for recording camera video with
 stereo audio from Ableton Push 3 over Link Audio, then saving an MP4 to Gallery.
 
-**Current stage: camera base plus Link Audio discovery.** The application is derived from Google's
+**Current stage: working Link Audio video recording, with synchronization still under test.**
+The application is derived from Google's
 [Jetpack Camera App](https://github.com/google/jetpack-camera-app), with the installed
-package `com.pushreel.app` and PushReel app labels and media filenames. The camera
-screen can enable Ableton Link Audio discovery, report peers/channels, and remember a
-selected channel. External PCM capture, AAC encoding, and synchronized A/V muxing are
-not implemented yet. The inherited recording path uses the phone microphone when
-audio is enabled; it does not record Push 3 audio.
+package `com.pushreel.app`. The camera screen discovers Link peers and channels and lets
+the user select a channel. With Link Audio enabled, PushReel records CameraX video and
+external stereo PCM as AVC/AAC in an MP4 published through MediaStore. With Link Audio
+disabled, the inherited CameraX recording path remains available.
+
+A short physical-phone recording with Ableton Live on a laptop produced a video file with
+audio. A/V offset was not measurable in that test. Pad-hit synchronization with Push 3,
+long-recording stability, and disconnect handling still need device testing. When Link
+timing metadata is grossly stale, the current recovery path starts audio timing at the
+first received buffer and advances it by PCM frame count; network latency can therefore
+remain as A/V offset. This recovery path restores recording but is not the final sync solution.
 
 See [development status](docs/PUSHREEL_STATUS.md) and [project requirements](AGENTS.md).
 The upstream documentation and license notices are retained below. Its feature list

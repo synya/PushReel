@@ -49,7 +49,22 @@ data class LinkAudioPcmStatus(
     val overflowCount: Long = 0,
     val underrunFrames: Long = 0,
     val underrunCount: Long = 0,
-    val invalidBufferCount: Long = 0
+    val invalidBufferCount: Long = 0,
+    /** Link buffers for which a presentation-time anchor was derived successfully. */
+    val timedBufferCount: Long = 0,
+    /** Callback receipt time minus the metadata-derived buffer presentation time. */
+    val latestPresentationLatenessUs: Long = 0,
+    val minPresentationLatenessUs: Long = 0,
+    val maxPresentationLatenessUs: Long = 0,
+    /** Consecutive same-session buffers compared against the preceding expected end. */
+    val interBufferTimingCount: Long = 0,
+    /** Derived buffer begin minus the preceding expected end; positive values are gaps. */
+    val latestInterBufferDeltaUs: Long = 0,
+    val minInterBufferDeltaUs: Long = 0,
+    val maxInterBufferDeltaUs: Long = 0,
+    val bufferCountDiscontinuityCount: Long = 0,
+    /** Inter-buffer deltas whose absolute value exceeds the native 5 ms threshold. */
+    val timestampDiscontinuityCount: Long = 0
 )
 
 /** Timing metadata copied from the Link buffer that supplied a PCM read. */
@@ -105,11 +120,21 @@ internal fun decodePcmStatus(values: LongArray): LinkAudioPcmStatus {
         overflowCount = values[8],
         underrunFrames = values[9],
         underrunCount = values[10],
-        invalidBufferCount = values[11]
+        invalidBufferCount = values[11],
+        timedBufferCount = values[12],
+        latestPresentationLatenessUs = values[13],
+        minPresentationLatenessUs = values[14],
+        maxPresentationLatenessUs = values[15],
+        interBufferTimingCount = values[16],
+        latestInterBufferDeltaUs = values[17],
+        minInterBufferDeltaUs = values[18],
+        maxInterBufferDeltaUs = values[19],
+        bufferCountDiscontinuityCount = values[20],
+        timestampDiscontinuityCount = values[21]
     )
 }
 
-private const val PCM_STATUS_FIELD_COUNT = 12
+private const val PCM_STATUS_FIELD_COUNT = 22
 
 internal fun decodePcmRead(values: LongArray?): LinkAudioPcmRead {
     if (values == null) return LinkAudioPcmRead(framesRead = 0, metadata = null)

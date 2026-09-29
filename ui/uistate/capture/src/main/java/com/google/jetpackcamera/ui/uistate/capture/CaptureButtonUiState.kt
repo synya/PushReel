@@ -37,6 +37,11 @@ sealed interface CaptureButtonUiState {
         override val isEnabled: Boolean = false
     }
 
+    /** The recording has stopped accepting input and is being saved. */
+    data object Saving : CaptureButtonUiState {
+        override val isEnabled: Boolean = false
+    }
+
     /**
      * The capture button is enabled and ready for user interaction.
      */
