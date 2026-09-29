@@ -636,15 +636,22 @@ and its relevant tests before installation so dependent modules cannot retain st
 Useful commands from the repository root:
 
 ```powershell
-.\gradlew.bat assembleDebug
-.\gradlew.bat spotlessCheck
+.\gradlew.bat :app:assembleStableDebug
+.\scripts\install-debug-owner.ps1
 ```
 
-If the exact application module differs after the fork, use the module-specific install task exposed by Gradle.
+The current Gradle configuration has no standalone `spotlessCheck` task. Use the formatting
+and static checks actually exposed by the configured build, and always run `git diff --check`.
+Never replace the owner-only installation script with a Gradle install task.
 
 ---
 
 ## Implementation Priorities
+
+The agreed current product priorities and pending device tests are recorded in
+`docs/BACKLOG.md`. Consult that file before selecting the next slice. The sequence below
+describes the original vertical implementation plan and is retained as architecture
+context; it does not override the current backlog.
 
 Implement vertically rather than finishing entire subsystems in isolation.
 

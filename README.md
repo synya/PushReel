@@ -18,7 +18,9 @@ timing metadata is grossly stale, the current recovery path starts audio timing 
 first received buffer and advances it by PCM frame count; network latency can therefore
 remain as A/V offset. This recovery path restores recording but is not the final sync solution.
 
-See [development status](docs/PUSHREEL_STATUS.md) and [project requirements](AGENTS.md).
+See the [agreed backlog](docs/BACKLOG.md), [development status](docs/PUSHREEL_STATUS.md),
+and [project requirements](AGENTS.md). The backlog records the next usability work,
+release preparation, and the pending Push 3 synchronization test.
 The upstream documentation and license notices are retained below. Its feature list
 describes the camera base, not completed PushReel Link Audio functionality.
 

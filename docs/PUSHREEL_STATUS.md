@@ -81,11 +81,18 @@ to the successful recording is not established.
 
 ## Next implementation slice
 
-Preserve the now-working recording path while improving usability. The user will measure
-A/V offset with Push 3 pad hits. If an offset is audible or visible, use that result to
-design a bounded correction for network/playout latency; do not assume the earlier
-multi-second stale metadata value is the physical A/V delay. Longer recordings, Gallery
-playback, disconnect behavior, and background/foreground lifecycle remain to verify.
+The agreed priorities and acceptance criteria are in [BACKLOG.md](BACKLOG.md). The next
+usability work is a non-consuming stereo Link peak meter beside the Link control, followed
+by persistence of Photo/Video mode and screen-awake behavior during recording. Develop a
+new minimal adaptive icon and prepare a signed, quiet release build before distribution.
+Test mid-recording Link loss as a reliability task. No implementation of these newly
+agreed backlog items has started in this documentation update.
+
+The user will measure A/V offset with Push 3 pad hits. If an offset is audible or
+visible, use that result to design a bounded correction for network/playout latency;
+do not assume the earlier multi-second stale metadata value is the physical A/V delay.
+Longer recordings, Gallery playback, disconnect behavior, and background/foreground
+lifecycle remain to verify.
 
 ## Verification
 
