@@ -28,8 +28,12 @@ Last reviewed: 2026-09-29. This file records agreed product work and its verific
    full-scale warning are follow-up polish. A full-scale PCM sample is not proof of
    analog clipping. Verify that metering does not cause audio loss or new underruns.
    **Status:** implemented in native/JNI/Kotlin/Compose; host and Android unit tests
-   and debug APK build passed. APK installed for Android `userId 0`; visual behavior
-   and recording regression test on the physical phone await user confirmation.
+   and debug APK build passed. The user confirmed moving L/R bars with sampled and
+   live instrument audio, zero bars without audio, and an MP4 with sound on the phone.
+   UI follow-up verified on device: bars are right of Link, empty tracks remain
+   visible in a thin outline, and peaks change from green to amber near -6 dBFS
+   and red near -1 dBFS. The final accessibility wording tweak was built and
+   installed for Android `userId 0`; its TalkBack output is not device-tested.
 
 2. **Remember the last Photo/Video mode.** Reuse the existing DataStore settings
    architecture. Persist the user's mode choice, restore it on relaunch, and keep the

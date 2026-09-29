@@ -85,7 +85,12 @@ The agreed priorities and acceptance criteria are in [BACKLOG.md](BACKLOG.md). T
 Link peak meter has been implemented beside the Link control: native code samples L/R
 without consuming the recording FIFO, JNI exposes bounded windows, and Compose shows
 compact bars. Host and Android unit tests and the debug APK build passed; the APK was
-installed only for Android `userId 0`. The user's visual and recording check is pending.
+installed only for Android `userId 0`. The user confirmed the bars respond to sampled
+and live instrument audio, show no level without audio, and do not break video recording
+with sound. The user also verified the follow-up on the phone: bars are right of Link,
+empty tracks are outlined, and signal peaks change from green to amber and red.
+An accessibility wording tweak for TalkBack was built and installed for Android
+`userId 0`; TalkBack output has not been device-tested.
 Next are persistence of Photo/Video mode and screen-awake behavior during recording.
 Develop a new minimal adaptive icon and prepare a signed, quiet release build before
 distribution. Test mid-recording Link loss as a reliability task.

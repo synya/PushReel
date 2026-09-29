@@ -28,6 +28,7 @@ import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
@@ -41,6 +42,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.BottomSheetScaffoldState
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
@@ -970,7 +972,6 @@ private fun LinkAudioIndicator(
     val selectedChannel = uiState.channels.firstOrNull { it.id == uiState.selectedChannelId }
 
     Row(modifier = modifier, verticalAlignment = Alignment.CenterVertically) {
-        LinkPeakMeter(uiState)
         Box {
         IconButton(
             onClick = { performIfEnabled(enabled) { expanded = true } },
@@ -1119,6 +1120,7 @@ private fun LinkAudioIndicator(
             }
         }
         }
+        LinkPeakMeter(uiState)
     }
 }
 
@@ -1127,12 +1129,20 @@ private fun LinkPeakMeter(uiState: LinkAudioUiState) {
     val ready = uiState.selectedChannelId != null && uiState.pcmStatus.channelSelected &&
         uiState.pcmStatus.selectedChannelId == uiState.selectedChannelId &&
         uiState.pcmStatus.sampleRate > 0 && uiState.linkEnabled && uiState.requestedEnabled
-    val track = Color.Black.copy(alpha = 0.56f)
-    val active = Color(0xFF58DB75)
+    val meterShape = RoundedCornerShape(3.dp)
+    val track = Color.White.copy(alpha = if (ready) 0.22f else 0.10f)
     Row(
         modifier = Modifier
-            .width(18.dp)
-            .height(28.dp)
+            .padding(start = 4.dp)
+            .width(22.dp)
+            .height(32.dp)
+            .background(Color.Black.copy(alpha = 0.56f), meterShape)
+            .border(
+                width = 1.dp,
+                color = Color.White.copy(alpha = if (ready) 0.7f else 0.4f),
+                shape = meterShape
+            )
+            .padding(2.dp)
             .clearAndSetSemantics { },
         horizontalArrangement = Arrangement.spacedBy(3.dp),
         verticalAlignment = Alignment.Bottom
@@ -1151,7 +1161,7 @@ private fun LinkPeakMeter(uiState: LinkAudioUiState) {
                             .align(Alignment.BottomCenter)
                             .fillMaxWidth()
                             .height((28f * fraction).dp)
-                            .background(active)
+                            .background(peak.toMeterColor())
                     )
                 }
             }
@@ -1165,6 +1175,12 @@ private fun Int.toMeterFraction(): Float {
     return ((db + 60f) / 60f).coerceIn(0.06f, 1f)
 }
 
+private fun Int.toMeterColor(): Color = when {
+    this >= 29_205 -> Color(0xFFFF5252) // Approximately -1 dBFS.
+    this >= 16_423 -> Color(0xFFFFD54F) // Approximately -6 dBFS.
+    else -> Color(0xFF58DB75)
+}
+
 private fun LinkAudioUiState.peakDescription(): String {
     if (!requestedEnabled || !linkEnabled || selectedChannelId == null ||
         !pcmStatus.channelSelected || pcmStatus.selectedChannelId != selectedChannelId ||
@@ -1172,6 +1188,10 @@ private fun LinkAudioUiState.peakDescription(): String {
     ) return "stereo level unavailable"
     if (peakLevels.framesObserved == 0L) return "no recent audio samples"
     if (peakLevels.leftPeakAbs == 0 && peakLevels.rightPeakAbs == 0) return "stereo signal silent"
+    val highestPeak = maxOf(peakLevels.leftPeakAbs, peakLevels.rightPeakAbs)
+    if (highestPeak >= 32_767) return "stereo signal at digital full scale"
+    if (highestPeak >= 29_205) return "stereo signal near digital full scale"
+    if (highestPeak >= 16_423) return "elevated stereo signal level"
     return "stereo signal present"
 }
 
