@@ -75,7 +75,10 @@ subsecond synchronization. Normal Link timing metadata remains the preferred pat
 After the recovery build was installed, the user confirmed that a short physical-phone
 recording with Link enabled and Ableton Live on a laptop saved successfully and contains
 audio. Synchronization sounded plausible, but that test could not establish the offset.
-A Push 3 pad-hit test is pending. The
+The user later tested with Push 3 SA and reported recorded sound with no perceptible
+A/V delay. Some recordings ended with an error after Stop, and later attempts kept
+failing until app restart; their old Logcat evidence is no longer available. A
+persistent debug recording log is needed before the next test. The
 Ableton Link submodule was updated to `13c5744`; whether that upstream change contributed
 to the successful recording is not established.
 
@@ -91,12 +94,20 @@ with sound. The user also verified the follow-up on the phone: bars are right of
 empty tracks are outlined, and signal peaks change from green to amber and red.
 An accessibility wording tweak for TalkBack was built and installed for Android
 `userId 0`; TalkBack output has not been device-tested.
+After a Push 3 SA test, the user reported meter blinking despite working audio and
+some recordings failing after Stop until app restart. The meter now uses fast visual
+attack and 300 ms decay, with fixed green/yellow/red height bands; it remains a peak
+meter, not an RMS calculation. Debug Link recordings now create a bounded diagnostic
+text file in `Downloads/PushReel`, including Stop, AAC, muxer, video-output state,
+and a full terminal failure stack. Host tests and the debug APK build passed, and the
+APK was installed only for Android `userId 0`. Meter smoothing and file logging still
+need a Push 3 SA device test.
 Next are persistence of Photo/Video mode and screen-awake behavior during recording.
 Develop a new minimal adaptive icon and prepare a signed, quiet release build before
 distribution. Test mid-recording Link loss as a reliability task.
 
-The user will measure A/V offset with Push 3 pad hits. If an offset is audible or
-visible, use that result to design a bounded correction for network/playout latency;
+The first Push 3 SA test did not reveal a perceptible offset. If a later offset is
+audible or visible, use that result to design a bounded correction for network/playout latency;
 do not assume the earlier multi-second stale metadata value is the physical A/V delay.
 Longer recordings, Gallery playback, disconnect behavior, and background/foreground
 lifecycle remain to verify.

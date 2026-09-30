@@ -1473,6 +1473,12 @@ internal suspend fun processPushReelVideoControlEvents(videoOutput: PushReelMedi
                 }
             }
             val source = event.audioPlan.source
+            val debugLog = PushReelDebugRecordingLog.create(context)
+            debugLog?.event(
+                "attempt requested source=${source.javaClass.simpleName} " +
+                    "maxDurationMillis=${event.maxVideoDuration} saveLocation=${event.saveLocation}"
+            )
+            debugLog?.event("video output at attempt start=${videoOutput.diagnostics.value}")
             try {
                 require(event.saveLocation is SaveLocation.Default) {
                     "Link Audio recording currently supports only the default MediaStore location"
@@ -1480,6 +1486,12 @@ internal suspend fun processPushReelVideoControlEvents(videoOutput: PushReelMedi
                 require(source is RecordingAudioSource.LinkAudioReady) {
                     "PushReel recording requires a ready Link Audio source"
                 }
+                debugLog?.event(
+                    "Link source peer=${source.peerName} peerId=${source.peerId} " +
+                        "channel=${source.channelName} channelId=${source.channelId} " +
+                        "sampleRate=${source.sampleRate} channels=${source.channelCount} " +
+                        "selectionGeneration=${source.selectionGeneration}"
+                )
                 val initialSettings = transientSettings.filterNotNull().first()
                 currentCameraState.update { old ->
                     old.copy(
@@ -1526,6 +1538,7 @@ internal suspend fun processPushReelVideoControlEvents(videoOutput: PushReelMedi
                         filePathGenerator = filePathGenerator,
                         videoOutput = videoOutput,
                         audioSource = source,
+                        debugLog = debugLog,
                         dispatcher = backgroundDispatcher
                     ).recordUntilStopped(
                         controlEvents = videoCaptureControlEvents,
@@ -1547,19 +1560,27 @@ internal suspend fun processPushReelVideoControlEvents(videoOutput: PushReelMedi
                         )
                     )
                 }
+                debugLog?.event("recording succeeded uri=$savedUri elapsedNanos=$elapsedNanos")
+                debugLog?.event("video output after success=${videoOutput.diagnostics.value}")
                 deliver(OnVideoRecordEvent.OnVideoRecorded(savedUri))
             } catch (error: CancellationException) {
+                debugLog?.failure("recording cancelled", error)
+                debugLog?.event("video output after cancellation=${videoOutput.diagnostics.value}")
                 currentCameraState.update { old ->
                     old.copy(videoRecordingState = VideoRecordingState.Inactive())
                 }
                 deliver(OnVideoRecordEvent.OnVideoRecordError(error))
                 throw error
             } catch (error: Throwable) {
+                debugLog?.failure("recording", error)
+                debugLog?.event("video output after failure=${videoOutput.diagnostics.value}")
                 Log.e(TAG, "PushReel recording failed", error)
                 currentCameraState.update { old ->
                     old.copy(videoRecordingState = VideoRecordingState.Inactive())
                 }
                 deliver(OnVideoRecordEvent.OnVideoRecordError(error))
+            } finally {
+                debugLog?.close()
             }
         }
     }

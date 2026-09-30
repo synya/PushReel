@@ -134,7 +134,8 @@ internal class PushReelRecordingOutput private constructor(
     private val resolver: ContentResolver,
     val uri: Uri,
     private val descriptor: ParcelFileDescriptor,
-    private val muxer: MediaMuxer
+    private val muxer: MediaMuxer,
+    private val onDiagnosticEvent: ((String) -> Unit)?
 ) : Closeable {
     private enum class TerminalState {
         ACTIVE,
@@ -253,11 +254,13 @@ internal class PushReelRecordingOutput private constructor(
             check(updated == 1) { "MediaStore failed to publish the completed video" }
         }
         terminalState = TerminalState.COMMITTED
+        diagnostic("muxer committed uri=$uri")
     }
 
     fun abort() {
         if (terminalState != TerminalState.ACTIVE) return
         terminalState = TerminalState.ABORTED
+        diagnostic("muxer abort requested uri=$uri started=$started")
         runCatching { closeMuxer() }
         runCatching { resolver.delete(uri, null, null) }
     }
@@ -274,6 +277,7 @@ internal class PushReelRecordingOutput private constructor(
         if (ready.isEmpty() || started) return
         muxer.start()
         started = true
+        diagnostic("muxer started videoTrack=$videoTrack audioTrack=$audioTrack")
         ready.forEach { marker ->
             val sample = checkNotNull(pendingSamples[marker]?.removeFirst())
             when (sample) {
@@ -294,6 +298,10 @@ internal class PushReelRecordingOutput private constructor(
         failure?.let { throw it }
     }
 
+    private fun diagnostic(message: String) {
+        runCatching { onDiagnosticEvent?.invoke(message) }
+    }
+
     companion object {
         private const val PRE_START_SAMPLE_CAPACITY = 96
         private const val AUDIO_COMMIT_SAMPLE_CAPACITY = 512
@@ -302,7 +310,8 @@ internal class PushReelRecordingOutput private constructor(
             resolver: ContentResolver,
             displayName: String,
             relativePath: String,
-            rotationDegrees: Int
+            rotationDegrees: Int,
+            onDiagnosticEvent: ((String) -> Unit)? = null
         ): PushReelRecordingOutput {
             require(Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                 "PushReel Link Audio recording requires Android 10 or newer"
@@ -328,7 +337,8 @@ internal class PushReelRecordingOutput private constructor(
                     MediaMuxer(
                         descriptor.fileDescriptor,
                         MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4
-                    )
+                    ),
+                    onDiagnosticEvent
                 )
                 output.setOrientationHint(rotationDegrees)
                 return output

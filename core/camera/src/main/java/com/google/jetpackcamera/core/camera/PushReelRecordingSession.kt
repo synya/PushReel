@@ -36,6 +36,7 @@ import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.async
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.channels.Channel
@@ -258,6 +259,7 @@ internal class PushReelRecordingSession(
     private val filePathGenerator: FilePathGenerator,
     private val videoOutput: PushReelMediaCodecVideoOutput,
     private val audioSource: RecordingAudioSource.LinkAudioReady,
+    private val debugLog: PushReelDebugRecordingLog? = null,
     private val dispatcher: CoroutineDispatcher = Dispatchers.IO,
     private val elapsedRealtimeUs: () -> Long = { SystemClock.elapsedRealtimeNanos() / 1_000L },
     private val uptimeUs: () -> Long = { SystemClock.uptimeMillis() * 1_000L }
@@ -272,6 +274,10 @@ internal class PushReelRecordingSession(
         val discardedFrames = audioSource.preparer.prepare()
         val originUs = elapsedRealtimeUs()
         val recordingDeadlineUs = recordingDeadlineUs(originUs, maxDurationMillis)
+        debugLog?.event(
+            "PCM prepared discardedFrames=$discardedFrames originElapsedRealtimeUs=$originUs " +
+                "deadlineElapsedRealtimeUs=$recordingDeadlineUs"
+        )
         Log.i(
             RECORDING_TAG,
             "PCM prepared discardedFrames=$discardedFrames originElapsedRealtimeUs=$originUs"
@@ -286,12 +292,16 @@ internal class PushReelRecordingSession(
         val stopBarrier = VideoStopBarrier()
         val stopBarrierSignal = CompletableDeferred<Unit>()
         fun reportFailure(error: Throwable) {
-            if (firstFailure.compareAndSet(null, error)) failureSignal.complete(error)
+            if (firstFailure.compareAndSet(null, error)) {
+                debugLog?.event("asynchronous failure ${error.javaClass.simpleName}: ${error.message}")
+                failureSignal.complete(error)
+            }
         }
         val consumer = object : EncodedVideoConsumer {
             override fun onVideoFormat(format: MediaFormat) {
                 synchronized(videoConsumerLock) {
                     if (!acceptingVideo.get()) return
+                    debugLog?.event("video encoder format=$format")
                     if (!messages.trySend(RecordingMessage.VideoFormat(format)).isSuccess) {
                         reportFailure(
                             IllegalStateException("Recording queue overflowed on video format")
@@ -331,6 +341,7 @@ internal class PushReelRecordingSession(
         var durationJob: Job? = null
         try {
             attachment = videoOutput.attachEncodedConsumer(consumer)
+            debugLog?.event("video encoder attached")
             val recordingSnapshot = attachment.snapshot
             videoToElapsedRealtimeOffsetUs.set(
                 sampleVideoTimestampOffsetUs(
@@ -338,6 +349,11 @@ internal class PushReelRecordingSession(
                     elapsedRealtimeUs = elapsedRealtimeUs,
                     uptimeUs = uptimeUs
                 )
+            )
+            debugLog?.event(
+                "video timebase=${recordingSnapshot.timebase} " +
+                    "offsetUs=${videoToElapsedRealtimeOffsetUs.get()} " +
+                    "rotationDegrees=${recordingSnapshot.rotationDegrees}"
             )
             val outputReady = CompletableDeferred<Unit>()
             writer = async(dispatcher) {
@@ -349,29 +365,40 @@ internal class PushReelRecordingSession(
                             suffixText = "MultiStream"
                         ),
                         relativePath = filePathGenerator.relativeVideoOutputPath,
-                        rotationDegrees = recordingSnapshot.rotationDegrees
+                        rotationDegrees = recordingSnapshot.rotationDegrees,
+                        onDiagnosticEvent = { debugLog?.event(it) }
                     )
+                    debugLog?.event("video MediaStore output created uri=${output.uri}")
                     outputReady.complete(Unit)
                     for (message in messages) {
                         when (message) {
-                            is RecordingMessage.VideoFormat ->
+                            is RecordingMessage.VideoFormat -> {
                                 output.setVideoFormat(message.format)
-                            is RecordingMessage.AudioFormat ->
+                                debugLog?.event("muxer video track configured")
+                            }
+                            is RecordingMessage.AudioFormat -> {
                                 output.setAudioFormat(message.format)
+                                debugLog?.event("muxer audio track configured")
+                            }
                             is RecordingMessage.VideoSample -> output.writeVideo(message.sample)
                             is RecordingMessage.AudioSample -> output.writeAudio(message.sample)
                             RecordingMessage.Finish -> break
                         }
                     }
+                    debugLog?.event("muxer commit requested")
                     output.commit()
                     output.uri
                 } catch (error: Throwable) {
+                    debugLog?.event(
+                        "muxer writer failed ${error.javaClass.simpleName}: ${error.message}"
+                    )
                     outputReady.completeExceptionally(error)
                     output?.abort()
                     throw error
                 }
             }
             outputReady.await()
+            debugLog?.event("video output ready")
             audioEncoder = async(dispatcher) {
                 encodeAudio(originUs, audioStopCutoffUs, messages)
             }
@@ -418,6 +445,7 @@ internal class PushReelRecordingSession(
                 deadlineUs = recordingDeadlineUs,
                 observedStopUs = elapsedRealtimeUs()
             )
+            debugLog?.event("stop requested reason=$reason cutoffElapsedRealtimeUs=$cutoffUs")
             onStopping(
                 recordingStoppingElapsedTimeNanos(
                     reason = reason,
@@ -430,22 +458,32 @@ internal class PushReelRecordingSession(
                 if (stopBarrier.request(cutoffUs)) stopBarrierSignal.complete(Unit)
                 audioStopCutoffUs.set(cutoffUs)
             }
-            withTimeout(VIDEO_STOP_BARRIER_TIMEOUT_MILLIS) {
-                select<Unit> {
-                    stopBarrierSignal.onAwait { }
-                    failureSignal.onAwait { throw it }
+            debugLog?.event("video stop barrier waiting timeoutMs=$VIDEO_STOP_BARRIER_TIMEOUT_MILLIS")
+            try {
+                withTimeout(VIDEO_STOP_BARRIER_TIMEOUT_MILLIS) {
+                    select<Unit> {
+                        stopBarrierSignal.onAwait { }
+                        failureSignal.onAwait { throw it }
+                    }
                 }
+            } catch (error: TimeoutCancellationException) {
+                debugLog?.event("video stop barrier timed out crossed=${stopBarrier.crossed}")
+                throw error
             }
+            debugLog?.event("video stop barrier crossed=${stopBarrier.crossed}")
             synchronized(videoConsumerLock) {
                 acceptingVideo.set(false)
                 checkNotNull(attachment).close()
             }
+            debugLog?.event("video encoder detached")
             attachment = null
             runningAudioEncoder.await()
+            debugLog?.event("AAC encoder finished")
             firstFailure.get()?.let { throw it }
             messages.send(RecordingMessage.Finish)
-            runningWriter.await()
+            runningWriter.await().also { debugLog?.event("recording output complete uri=$it") }
         } catch (error: Throwable) {
+            debugLog?.event("recording session failed ${error.javaClass.simpleName}: ${error.message}")
             synchronized(videoConsumerLock) {
                 acceptingVideo.set(false)
                 attachment?.close()
@@ -491,6 +529,10 @@ internal class PushReelRecordingSession(
                 MediaCodec.CONFIGURE_FLAG_ENCODE
             )
             codec.start()
+            debugLog?.event(
+                "AAC encoder started sampleRate=${audioSource.sampleRate} " +
+                    "channels=${audioSource.channelCount} originElapsedRealtimeUs=$originUs"
+            )
             Log.i(
                 RECORDING_TAG,
                 "AAC started sampleRate=${audioSource.sampleRate} " +
@@ -517,6 +559,12 @@ internal class PushReelRecordingSession(
                         dataReads++
                         invalidTimingStartedUs = null
                         if (dataReads == 1L) {
+                            debugLog?.event(
+                                "first PCM read frames=${read.framesRead} " +
+                                    "firstFrameElapsedRealtimeUs=" +
+                                    read.metadata.firstFrameElapsedRealtimeUs +
+                                    " bufferCount=${read.metadata.bufferCount}"
+                            )
                             Log.i(
                                 RECORDING_TAG,
                                 "First PCM read frames=${read.framesRead} " +
@@ -541,6 +589,10 @@ internal class PushReelRecordingSession(
                             queuePcm(codec, pcm, window)
                             queuedFrames += window.frames
                             if (queuedFrames == window.frames.toLong()) {
+                                debugLog?.event(
+                                    "first PCM queued frames=${window.frames} " +
+                                        "ptsUs=${window.presentationTimeUs}"
+                                )
                                 Log.i(
                                     RECORDING_TAG,
                                     "First PCM queued frames=${window.frames} " +
@@ -562,6 +614,7 @@ internal class PushReelRecordingSession(
                     }
                     RecordingPcmReadResult.Underrun -> {
                         underruns++
+                        if (underruns == 1L) debugLog?.event("first PCM underrun")
                         if (underruns == 1L || underruns % 500L == 0L) {
                             Log.d(
                                 RECORDING_TAG,
@@ -578,6 +631,7 @@ internal class PushReelRecordingSession(
                         val nowUs = elapsedRealtimeUs()
                         val startedUs = invalidTimingStartedUs ?: nowUs.also {
                             invalidTimingStartedUs = it
+                            debugLog?.event("PCM invalid timing: ${read.reason}")
                             Log.w(
                                 RECORDING_TAG,
                                 "Discarding Link Audio PCM without valid timing: ${read.reason}"
@@ -594,6 +648,11 @@ internal class PushReelRecordingSession(
             queueAudioEndOfStream(codec)
             drainAudio(codec, messages, endOfStream = true)
         } finally {
+            debugLog?.event(
+                "AAC encoder stopped dataReads=$dataReads droppedWindows=$droppedWindows " +
+                    "underruns=$underruns invalidTimingReads=$invalidTimingReads " +
+                    "queuedFrames=$queuedFrames"
+            )
             Log.i(
                 RECORDING_TAG,
                 "AAC stopped dataReads=$dataReads droppedWindows=$droppedWindows " +
@@ -655,8 +714,10 @@ internal class PushReelRecordingSession(
                     if (!endOfStream) return
                     check(++idleCount < 200) { "AAC encoder did not reach end of stream" }
                 }
-                index == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED ->
+                index == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED -> {
+                    debugLog?.event("AAC encoder output format=${codec.outputFormat}")
                     messages.send(RecordingMessage.AudioFormat(codec.outputFormat))
+                }
                 index >= 0 -> {
                     idleCount = 0
                     val isConfig = info.flags and MediaCodec.BUFFER_FLAG_CODEC_CONFIG != 0

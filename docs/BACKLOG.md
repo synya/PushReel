@@ -1,6 +1,6 @@
 # PushReel backlog
 
-Last reviewed: 2026-09-29. This file records agreed product work and its verification state.
+Last reviewed: 2026-09-30. This file records agreed product work and its verification state.
 
 ## Working baseline and pending device evidence
 
@@ -8,9 +8,13 @@ Last reviewed: 2026-09-29. This file records agreed product work and its verific
   build, the user recorded a video with audible Link Audio from Ableton Live on a
   laptop. The recording was successful; exact A/V offset was not measurable by ear
   in that test.
-- The user will test Push 3 with visible pad hits. Do not change synchronization
-  solely from the many-second stale Link metadata seen earlier: that value is not
-  the physical network/audio delay. The current fallback may retain network delay.
+- The user tested Push 3 SA and reports video with sound and no perceptible delay.
+  Do not change synchronization solely from the many-second stale Link metadata
+  seen earlier: that value is not the physical network/audio delay.
+- Several Push 3 SA recordings ended with an error after Stop. Errors then recurred
+  on later attempts until the app was restarted; their old Logcat evidence is
+  unavailable. Add a debug-only per-recording diagnostic file in Downloads before
+  the next device test, then investigate stop/finalization and state reuse from it.
 - Preserve successful MP4 recording while making usability changes. Longer recordings,
   Gallery playback, mid-recording disconnect, and background/foreground behavior still
   need explicit device verification.
@@ -34,6 +38,19 @@ Last reviewed: 2026-09-29. This file records agreed product work and its verific
    visible in a thin outline, and peaks change from green to amber near -6 dBFS
    and red near -1 dBFS. The final accessibility wording tweak was built and
    installed for Android `userId 0`; its TalkBack output is not device-tested.
+   **New device feedback and response:** the bars blink with Push 3 SA although audio
+   recording works. The visual envelope now rises immediately and decays over 300 ms
+   across empty 50 ms peak windows. The underlying measurement remains peak, not RMS.
+   Fixed green/yellow/red bands replace recoloring an entire bar. The debug APK was
+   built and installed for Android `userId 0`; recheck appearance on Push 3 SA.
+
+1a. **Persist debug recording diagnostics.** One bounded text file per Link recording
+    is now written to `Downloads/PushReel` in debug builds. It includes start, source
+    format, audio/video and muxer milestones, stop, counters, video-output state, and
+    the full failure stack. File I/O runs on an IO worker; logging failures do not
+    affect recording. Files remain visible after a failed or interrupted capture.
+    Unit tests and debug APK build passed; verify file creation and contents on the
+    phone during the next Push 3 SA recording test.
 
 2. **Remember the last Photo/Video mode.** Reuse the existing DataStore settings
    architecture. Persist the user's mode choice, restore it on relaunch, and keep the
@@ -67,7 +84,8 @@ Last reviewed: 2026-09-29. This file records agreed product work and its verific
 
 ## Deferred or already covered
 
-- **A/V latency correction:** wait for the user's Push 3 pad-hit test. If measurable,
+- **A/V latency correction:** the first Push 3 SA test had no perceptible offset. If
+  a later test finds a measurable offset,
   design a bounded correction from actual A/V offset. Do not try to reconstruct audio
   from before the recording started.
 - **Peak-hold and clip styling:** follow after a reliable basic L/R meter.

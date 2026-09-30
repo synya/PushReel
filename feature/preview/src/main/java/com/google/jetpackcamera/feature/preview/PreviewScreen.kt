@@ -24,6 +24,7 @@ import androidx.camera.core.SurfaceRequest
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.EnterTransition
 import androidx.compose.animation.ExitTransition
+import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -1131,6 +1132,16 @@ private fun LinkPeakMeter(uiState: LinkAudioUiState) {
         uiState.pcmStatus.sampleRate > 0 && uiState.linkEnabled && uiState.requestedEnabled
     val meterShape = RoundedCornerShape(3.dp)
     val track = Color.White.copy(alpha = if (ready) 0.22f else 0.10f)
+    val leftLevel = rememberSmoothedPeakLevel(
+        uiState.peakLevels.leftPeakAbs,
+        ready,
+        uiState.selectedChannelId
+    )
+    val rightLevel = rememberSmoothedPeakLevel(
+        uiState.peakLevels.rightPeakAbs,
+        ready,
+        uiState.selectedChannelId
+    )
     Row(
         modifier = Modifier
             .padding(start = 4.dp)
@@ -1147,8 +1158,7 @@ private fun LinkPeakMeter(uiState: LinkAudioUiState) {
         horizontalArrangement = Arrangement.spacedBy(3.dp),
         verticalAlignment = Alignment.Bottom
     ) {
-        listOf(uiState.peakLevels.leftPeakAbs, uiState.peakLevels.rightPeakAbs).forEach { peak ->
-            val fraction = if (ready) peak.toMeterFraction() else 0f
+        listOf(leftLevel, rightLevel).forEach { fraction ->
             Box(
                 modifier = Modifier
                     .width(6.dp)
@@ -1156,29 +1166,52 @@ private fun LinkPeakMeter(uiState: LinkAudioUiState) {
                     .background(track)
             ) {
                 if (fraction > 0f) {
-                    Box(
-                        modifier = Modifier
-                            .align(Alignment.BottomCenter)
-                            .fillMaxWidth()
-                            .height((28f * fraction).dp)
-                            .background(peak.toMeterColor())
-                    )
+                    val level = 28f * fraction
+                    Column(
+                        modifier = Modifier.align(Alignment.BottomCenter).fillMaxWidth()
+                    ) {
+                        val red = (level - 25f).coerceIn(0f, 3f)
+                        val amber = (level - 20f).coerceIn(0f, 5f)
+                        val green = level.coerceIn(0f, 20f)
+                        if (red > 0f) {
+                            Box(Modifier.fillMaxWidth().height(red.dp).background(Color(0xFFFF5252)))
+                        }
+                        if (amber > 0f) {
+                            Box(Modifier.fillMaxWidth().height(amber.dp).background(Color(0xFFFFD54F)))
+                        }
+                        if (green > 0f) {
+                            Box(Modifier.fillMaxWidth().height(green.dp).background(Color(0xFF58DB75)))
+                        }
+                    }
                 }
             }
         }
     }
 }
 
+@Composable
+private fun rememberSmoothedPeakLevel(peak: Int, ready: Boolean, channelId: String?): Float {
+    val level = remember(channelId) { Animatable(0f) }
+    LaunchedEffect(peak, ready, channelId) {
+        val target = if (ready) peak.toMeterFraction() else 0f
+        if (!ready || target >= level.value) {
+            level.snapTo(target)
+        } else {
+            level.animateTo(target, animationSpec = tween(durationMillis = 300))
+        }
+    }
+    return if (ready) level.value else 0f
+}
+
 private fun Int.toMeterFraction(): Float {
     if (this <= 0) return 0f
     val db = 20f * log10(this.toFloat() / 32_768f)
-    return ((db + 60f) / 60f).coerceIn(0.06f, 1f)
-}
-
-private fun Int.toMeterColor(): Color = when {
-    this >= 29_205 -> Color(0xFFFF5252) // Approximately -1 dBFS.
-    this >= 16_423 -> Color(0xFFFFD54F) // Approximately -6 dBFS.
-    else -> Color(0xFF58DB75)
+    val height = when {
+        db <= -6f -> (db + 60f) * (20f / 54f)
+        db <= -1f -> 20f + (db + 6f)
+        else -> 25f + (db + 1f) * 3f
+    }
+    return (height / 28f).coerceIn(0.06f, 1f)
 }
 
 private fun LinkAudioUiState.peakDescription(): String {
