@@ -165,6 +165,11 @@ class PreviewViewModel @Inject constructor(
      */
     val quickSettingsController: QuickSettingsController = QuickSettingsControllerImpl(
         cameraSystemProvider = cameraSystemRepository::getCameraSystem,
+        saveCaptureMode = { captureMode ->
+            if (externalCaptureMode == ExternalCaptureMode.Standard) {
+                settingsRepository.updateCaptureMode(captureMode)
+            }
+        },
         coroutineContext = viewModelScope.coroutineContext
     )
 

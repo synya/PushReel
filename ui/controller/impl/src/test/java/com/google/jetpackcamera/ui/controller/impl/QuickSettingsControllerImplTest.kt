@@ -23,10 +23,12 @@ import com.google.jetpackcamera.model.DynamicRange
 import com.google.jetpackcamera.model.FlashMode
 import com.google.jetpackcamera.model.ImageOutputFormat
 import com.google.jetpackcamera.model.LensFacing
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.advanceUntilIdle
+import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import org.junit.Before
 import org.junit.Test
@@ -40,12 +42,14 @@ internal class QuickSettingsControllerImplTest {
     private val testDispatcher = StandardTestDispatcher(testScope.testScheduler)
 
     private val cameraSystem = FakeCameraSystem()
+    private val savedCaptureModes = mutableListOf<CaptureMode>()
     private lateinit var controller: QuickSettingsControllerImpl
 
     @Before
     fun setup() {
         controller = QuickSettingsControllerImpl(
             cameraSystemProvider = { cameraSystem },
+            saveCaptureMode = { savedCaptureModes.add(it) },
             coroutineContext = testDispatcher
         )
     }
@@ -100,6 +104,41 @@ internal class QuickSettingsControllerImplTest {
         assertThat(
             cameraSystem.getCurrentSettings().value?.captureMode
         ).isEqualTo(CaptureMode.VIDEO_ONLY)
+        assertThat(savedCaptureModes).containsExactly(CaptureMode.VIDEO_ONLY)
+    }
+
+    @Test
+    fun setCaptureMode_rapidSelectionsPersistInOrder() = testScope.runTest {
+        val firstSaveStarted = CompletableDeferred<Unit>()
+        val releaseFirstSave = CompletableDeferred<Unit>()
+        controller = QuickSettingsControllerImpl(
+            cameraSystemProvider = { cameraSystem },
+            saveCaptureMode = { mode ->
+                if (mode == CaptureMode.IMAGE_ONLY) {
+                    firstSaveStarted.complete(Unit)
+                    releaseFirstSave.await()
+                }
+                savedCaptureModes.add(mode)
+            },
+            coroutineContext = testDispatcher
+        )
+
+        controller.setCaptureMode(CaptureMode.IMAGE_ONLY)
+        runCurrent()
+        assertThat(firstSaveStarted.isCompleted).isTrue()
+
+        controller.setCaptureMode(CaptureMode.VIDEO_ONLY)
+        runCurrent()
+        assertThat(savedCaptureModes).isEmpty()
+
+        releaseFirstSave.complete(Unit)
+        advanceUntilIdle()
+
+        assertThat(savedCaptureModes)
+            .containsExactly(CaptureMode.IMAGE_ONLY, CaptureMode.VIDEO_ONLY)
+            .inOrder()
+        assertThat(cameraSystem.getCurrentSettings().value?.captureMode)
+            .isEqualTo(CaptureMode.VIDEO_ONLY)
     }
 
     @Test

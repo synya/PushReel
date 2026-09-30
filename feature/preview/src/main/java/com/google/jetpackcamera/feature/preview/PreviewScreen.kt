@@ -76,6 +76,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
@@ -174,6 +175,18 @@ fun PreviewScreen(
     val linkAudioUiState: LinkAudioUiState by viewModel.linkAudioUiState.collectAsState()
 
     val isReady by remember { derivedStateOf { rawUiState.value is CaptureUiState.Ready } }
+    val previewView = LocalView.current
+    val recordingState = (rawUiState.value as? CaptureUiState.Ready)?.videoRecordingState
+    val keepScreenOn =
+        recordingState is VideoRecordingState.Starting || recordingState is VideoRecordingState.Active
+
+    if (keepScreenOn) {
+        LifecycleStartEffect(previewView) {
+            val previousKeepScreenOn = previewView.keepScreenOn
+            previewView.keepScreenOn = true
+            onStopOrDispose { previewView.keepScreenOn = previousKeepScreenOn }
+        }
+    }
 
     val surfaceRequest: SurfaceRequest?
         by viewModel.surfaceRequest.collectAsState()

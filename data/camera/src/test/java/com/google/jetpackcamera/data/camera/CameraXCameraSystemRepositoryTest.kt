@@ -109,4 +109,44 @@ class CameraXCameraSystemRepositoryTest {
         assertThat(mimeTypes).isNotNull()
         assertThat(testCamera.initializedSettings).isNotNull()
     }
+
+    @Test
+    fun getCameraSystem_restoresSavedModeForStandardLaunch() = testScope.runTest {
+        val testCamera = TestCameraSystem()
+        val settingsRepository = FakeSettingsRepository()
+        settingsRepository.updateCaptureMode(CaptureMode.VIDEO_ONLY)
+        val repository = CameraXCameraSystemRepository(
+            cameraXCameraSystemProvider = Provider { testCamera },
+            settingsRepository = settingsRepository,
+            launchConfig = CameraLaunchConfig(),
+            scope = testScope
+        )
+
+        repository.getCameraSystem()
+
+        assertThat(testCamera.initializedSettings?.captureMode).isEqualTo(CaptureMode.VIDEO_ONLY)
+    }
+
+    @Test
+    fun getCameraSystem_externalIntentOverridesSavedModeWithoutChangingPreference() =
+        testScope.runTest {
+            val testCamera = TestCameraSystem()
+            val settingsRepository = FakeSettingsRepository()
+            settingsRepository.updateCaptureMode(CaptureMode.VIDEO_ONLY)
+            val repository = CameraXCameraSystemRepository(
+                cameraXCameraSystemProvider = Provider { testCamera },
+                settingsRepository = settingsRepository,
+                launchConfig = CameraLaunchConfig(
+                    externalCaptureMode = ExternalCaptureMode.ImageCapture
+                ),
+                scope = testScope
+            )
+
+            repository.getCameraSystem()
+
+            assertThat(testCamera.initializedSettings?.captureMode)
+                .isEqualTo(CaptureMode.IMAGE_ONLY)
+            assertThat(settingsRepository.getCurrentDefaultCameraAppSettings().captureMode)
+                .isEqualTo(CaptureMode.VIDEO_ONLY)
+        }
 }

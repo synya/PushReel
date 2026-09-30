@@ -17,6 +17,7 @@ package com.google.jetpackcamera.settings
 
 import com.google.jetpackcamera.model.AspectRatio
 import com.google.jetpackcamera.model.CameraEffectId
+import com.google.jetpackcamera.model.CaptureMode
 import com.google.jetpackcamera.model.ConcurrentCameraMode
 import com.google.jetpackcamera.model.DarkMode
 import com.google.jetpackcamera.model.DynamicRange
@@ -43,6 +44,8 @@ interface SettingsDataSource {
      * Retrieves the current default [CameraAppSettings] as a single snapshot.
      */
     suspend fun getCurrentDefaultCameraAppSettings(): CameraAppSettings
+
+    suspend fun updateCaptureMode(captureMode: CaptureMode)
 
     /**
      * Updates the default camera lens facing selection.

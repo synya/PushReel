@@ -17,6 +17,7 @@ package com.google.jetpackcamera.settings
 
 import com.google.jetpackcamera.model.AspectRatio
 import com.google.jetpackcamera.model.CameraEffectId
+import com.google.jetpackcamera.model.CaptureMode
 import com.google.jetpackcamera.model.ConcurrentCameraMode
 import com.google.jetpackcamera.model.DarkMode
 import com.google.jetpackcamera.model.DynamicRange
@@ -37,6 +38,8 @@ interface SettingsRepository {
     val defaultCameraAppSettings: Flow<CameraAppSettings>
 
     suspend fun getCurrentDefaultCameraAppSettings(): CameraAppSettings
+
+    suspend fun updateCaptureMode(captureMode: CaptureMode)
 
     suspend fun updateDefaultLensFacing(lensFacing: LensFacing)
 

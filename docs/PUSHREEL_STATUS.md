@@ -102,7 +102,13 @@ text file in `Downloads/PushReel`, including Stop, AAC, muxer, video-output stat
 and a full terminal failure stack. Host tests and the debug APK build passed, and the
 APK was installed only for Android `userId 0`. Meter smoothing and file logging still
 need a Push 3 SA device test.
-Next are persistence of Photo/Video mode and screen-awake behavior during recording.
+Photo/Video mode persistence and screen-awake behavior during recording are implemented.
+A clean debug build and relevant tests passed, and the APK was installed only for
+Android `userId 0`. The user verified Photo/Video restoration after closing and
+force-stopping the app and confirmed that the screen stays on during recording. The saved mode uses the
+existing DataStore; first launch remains `STANDARD` and external capture intents
+temporarily override it. The preview holds its view awake from `Starting` through
+`Stopping` and restores the previous setting on failure or lifecycle stop.
 Develop a new minimal adaptive icon and prepare a signed, quiet release build before
 distribution. Test mid-recording Link loss as a reliability task.
 

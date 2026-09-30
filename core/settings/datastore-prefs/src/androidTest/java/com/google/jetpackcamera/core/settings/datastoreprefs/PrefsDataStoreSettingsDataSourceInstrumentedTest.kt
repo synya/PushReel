@@ -17,6 +17,7 @@ package com.google.jetpackcamera.core.settings.datastoreprefs
 
 import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.Preferences
+import androidx.datastore.preferences.core.edit
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.google.common.truth.Truth.assertThat
 import com.google.jetpackcamera.core.settings.datastoreprefs.testing.FakeDataStoreModule
@@ -41,6 +42,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runTest
@@ -90,6 +92,27 @@ class PrefsDataStoreSettingsDataSourceInstrumentedTest {
         val cameraAppSettings: CameraAppSettings = dataSource.getCurrentDefaultCameraAppSettings()
         advanceUntilIdle()
         assertThat(cameraAppSettings).isEqualTo(DEFAULT_CAMERA_APP_SETTINGS)
+    }
+
+    @Test
+    fun captureMode_usesDefaultUntilExplicitlySelected() = runTest {
+        assertThat(dataSource.getCurrentDefaultCameraAppSettings().captureMode)
+            .isEqualTo(CaptureMode.STANDARD)
+
+        dataSource.updateCaptureMode(CaptureMode.VIDEO_ONLY)
+
+        assertThat(dataSource.getCurrentDefaultCameraAppSettings().captureMode)
+            .isEqualTo(CaptureMode.VIDEO_ONLY)
+        assertThat(testDataStore.data.first()[PreferenceKeys.KEY_CAPTURE_MODE])
+            .isEqualTo(CaptureMode.VIDEO_ONLY.name)
+    }
+
+    @Test
+    fun captureMode_unknownStoredValue_fallsBackToDefault() = runTest {
+        testDataStore.edit { it[PreferenceKeys.KEY_CAPTURE_MODE] = "UNKNOWN_MODE" }
+
+        assertThat(dataSource.getCurrentDefaultCameraAppSettings().captureMode)
+            .isEqualTo(CaptureMode.STANDARD)
     }
 
     @Test

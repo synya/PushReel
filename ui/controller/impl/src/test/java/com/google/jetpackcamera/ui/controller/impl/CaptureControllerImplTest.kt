@@ -306,6 +306,7 @@ class CaptureControllerImplTest {
                 sampleRate = 48_000,
                 channelCount = 2,
                 selectionGeneration = 12,
+                preparer = { 0L },
                 reader = { _, _ -> RecordingPcmReadResult.Underrun }
             )
         )

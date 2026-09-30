@@ -21,6 +21,7 @@ import androidx.datastore.preferences.core.longPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 
 internal object PreferenceKeys {
+    val KEY_CAPTURE_MODE = stringPreferencesKey("capture_mode")
     val KEY_LENS_FACING = stringPreferencesKey("lens_facing")
     val KEY_DARK_MODE = stringPreferencesKey("dark_mode")
     val KEY_FLASH_MODE = stringPreferencesKey("flash_mode")

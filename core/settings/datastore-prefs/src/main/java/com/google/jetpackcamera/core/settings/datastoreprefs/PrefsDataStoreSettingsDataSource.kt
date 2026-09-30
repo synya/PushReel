@@ -74,7 +74,8 @@ class PrefsDataStoreSettingsDataSource(
             audioEnabled = prefs[PreferenceKeys.KEY_AUDIO_ENABLED] ?: true,
             concurrentCameraMode = prefs[PreferenceKeys.KEY_CONCURRENT_CAMERA_MODE]
                 .toEnumOrDefault(ConcurrentCameraMode.OFF),
-            captureMode = defaultCaptureModeOverride
+            captureMode = prefs[PreferenceKeys.KEY_CAPTURE_MODE]
+                .toEnumOrDefault(defaultCaptureModeOverride)
         )
     }
 
@@ -84,6 +85,12 @@ class PrefsDataStoreSettingsDataSource(
     override suspend fun updateDefaultLensFacing(lensFacing: LensFacing) {
         dataStore.edit { prefs ->
             prefs[PreferenceKeys.KEY_LENS_FACING] = lensFacing.name
+        }
+    }
+
+    override suspend fun updateCaptureMode(captureMode: CaptureMode) {
+        dataStore.edit { prefs ->
+            prefs[PreferenceKeys.KEY_CAPTURE_MODE] = captureMode.name
         }
     }
 

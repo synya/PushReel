@@ -29,6 +29,8 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.job
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 
 /**
  * Implementation of [QuickSettingsController] that interacts with [CameraSystem].
@@ -38,10 +40,12 @@ import kotlinx.coroutines.launch
  */
 class QuickSettingsControllerImpl(
     private val cameraSystemProvider: suspend () -> CameraSystem,
+    private val saveCaptureMode: suspend (CaptureMode) -> Unit,
     coroutineContext: CoroutineContext
 ) : QuickSettingsController {
     private val job = Job(parent = coroutineContext[Job.Key])
     private val scope = CoroutineScope(coroutineContext + job)
+    private val captureModeMutex = Mutex()
 
     override fun setLensFacing(lensFace: LensFacing) {
         scope.launch {
@@ -77,7 +81,10 @@ class QuickSettingsControllerImpl(
 
     override fun setCaptureMode(captureMode: CaptureMode) {
         scope.launch {
-            cameraSystemProvider().setCaptureMode(captureMode)
+            captureModeMutex.withLock {
+                cameraSystemProvider().setCaptureMode(captureMode)
+                saveCaptureMode(captureMode)
+            }
         }
     }
 

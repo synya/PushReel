@@ -13,8 +13,8 @@ Last reviewed: 2026-09-30. This file records agreed product work and its verific
   seen earlier: that value is not the physical network/audio delay.
 - Several Push 3 SA recordings ended with an error after Stop. Errors then recurred
   on later attempts until the app was restarted; their old Logcat evidence is
-  unavailable. Add a debug-only per-recording diagnostic file in Downloads before
-  the next device test, then investigate stop/finalization and state reuse from it.
+  unavailable. A debug-only per-recording diagnostic file is now available in
+  Downloads; investigate stop/finalization and state reuse after the next device test.
 - Preserve successful MP4 recording while making usability changes. Longer recordings,
   Gallery playback, mid-recording disconnect, and background/foreground behavior still
   need explicit device verification.
@@ -57,9 +57,19 @@ Last reviewed: 2026-09-30. This file records agreed product work and its verific
    current first-launch default. Do not change recording state or interrupt a capture
    to apply a restored setting. The selected Link channel is a separate later item
    because it may not exist when the app restarts.
+   **Status:** implemented with DataStore persistence and startup restoration. First
+   launch remains `STANDARD`; an external capture intent overrides the saved mode
+   for that launch without changing the preference. Unit tests cover rapid choices
+   and startup override. Clean debug build and relevant tests passed; APK installed
+   for Android `userId 0`. The user verified restoration after closing, force-
+   stopping, and reopening the app with different selected modes.
 
 3. **Keep the screen on during recording.** Hold the screen awake only while capture
    is active and release the flag on successful stop, failure, and lifecycle teardown.
+   **Status:** implemented in the preview lifecycle from `Starting` through `Stopping`.
+   The previous view flag is restored on stop, error, or screen lifecycle stop. Clean
+   debug build and relevant tests passed; APK installed for Android `userId 0`.
+   The user confirmed that the screen stays on during video recording.
 
 4. **Harden loss of Link during recording.** Source invalidation and error handling
    already exist in pieces. Test a real mid-recording disconnect and ensure recording
@@ -101,7 +111,8 @@ Last reviewed: 2026-09-30. This file records agreed product work and its verific
 
 ## Recommended sequence
 
-Build the peak meter, then mode persistence and screen-awake behavior. Test disconnect
-handling as part of recording reliability. Develop the icon design in parallel with
-these small UI changes. Prepare and device-test the release build before distributing
-it. Revisit synchronization only after the user's Push 3 measurement.
+The peak meter, mode persistence, and screen-awake behavior are implemented. Next,
+use the debug files from a Push 3 SA recording session to investigate any Stop errors
+and test mid-recording disconnect handling. Develop the icon design, then prepare and
+device-test the release build before distribution. Revisit synchronization only if a
+future Push 3 test reveals a measurable offset.

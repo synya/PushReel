@@ -17,6 +17,7 @@ package com.google.jetpackcamera.settings
 
 import com.google.jetpackcamera.model.AspectRatio
 import com.google.jetpackcamera.model.CameraEffectId
+import com.google.jetpackcamera.model.CaptureMode
 import com.google.jetpackcamera.model.ConcurrentCameraMode
 import com.google.jetpackcamera.model.DarkMode
 import com.google.jetpackcamera.model.DynamicRange
@@ -42,6 +43,10 @@ class LocalSettingsRepository @Inject constructor(
 
     override suspend fun getCurrentDefaultCameraAppSettings(): CameraAppSettings =
         settingsDataSource.getCurrentDefaultCameraAppSettings()
+
+    override suspend fun updateCaptureMode(captureMode: CaptureMode) {
+        settingsDataSource.updateCaptureMode(captureMode)
+    }
 
     override suspend fun updateDefaultLensFacing(lensFacing: LensFacing) {
         settingsDataSource.updateDefaultLensFacing(lensFacing)
