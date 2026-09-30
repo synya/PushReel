@@ -78,7 +78,7 @@ audio. Synchronization sounded plausible, but that test could not establish the 
 The user later tested with Push 3 SA and reported recorded sound with no perceptible
 A/V delay. Some recordings ended with an error after Stop, and later attempts kept
 failing until app restart; their old Logcat evidence is no longer available. A
-persistent debug recording log is needed before the next test. The
+persistent debug recording log is available for the next test. The
 Ableton Link submodule was updated to `13c5744`; whether that upstream change contributed
 to the successful recording is not established.
 
@@ -109,8 +109,20 @@ force-stopping the app and confirmed that the screen stays on during recording. 
 existing DataStore; first launch remains `STANDARD` and external capture intents
 temporarily override it. The preview holds its view awake from `Starting` through
 `Stopping` and restores the previous setting on failure or lifecycle stop.
-Develop a new minimal adaptive icon and prepare a signed, quiet release build before
-distribution. Test mid-recording Link loss as a reliability task.
+A minimal adaptive icon with a red record mark and stereo bars has been prepared,
+including monochrome and legacy launcher assets. Release preparation now includes
+resource shrinking, preservation of the Link JNI bridge, debug-only profileability
+and launch diagnostics, and optional signing through environment variables. A native
+PCM read failure now propagates as a recording error instead of masquerading as an
+underrun. Clean debug and unsigned release builds passed, including R8/resource
+shrinking and release lint; targeted unit tests passed. The debug APK was installed
+only for Android `userId 0`, launched to a resumed activity, and produced no
+filtered startup errors in Logcat. The launcher appearance awaits a user check.
+Test mid-recording
+Link loss and post-Stop recovery with Push 3 SA using
+[PUSH3_EVENING_TEST_PLAN.md](PUSH3_EVENING_TEST_PLAN.md). A signed release recording
+remains a separate distribution gate. Release signing and build steps are documented
+in [RELEASE.md](RELEASE.md).
 
 The first Push 3 SA test did not reveal a perceptible offset. If a later offset is
 audible or visible, use that result to design a bounded correction for network/playout latency;

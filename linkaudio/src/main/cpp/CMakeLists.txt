@@ -19,6 +19,7 @@ target_compile_definitions(pushreel_link_audio PRIVATE
     ASIO_STANDALONE=1
     LINK_PLATFORM_LINUX=1
     LINK_PLATFORM_UNIX=1
+    PUSHREEL_NATIVE_DIAGNOSTICS=$<CONFIG:Debug>
 )
 
 target_compile_options(pushreel_link_audio PRIVATE

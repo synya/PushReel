@@ -108,6 +108,23 @@ class CameraLaunchConfigTest {
     }
 
     @Test
+    fun cameraLaunchConfigProvider_releaseIntent_ignoresDebugExtras() {
+        val provider = CameraLaunchConfigProvider()
+        val intent = Intent(MediaStore.ACTION_IMAGE_CAPTURE).apply {
+            putExtra(KEY_DEBUG_MODE, true)
+            putExtra(KEY_DEBUG_SINGLE_LENS_MODE, "back")
+        }
+        provider.setIntent(intent, allowDebugSettings = false)
+
+        assertThat(provider.config.value).isEqualTo(
+            CameraLaunchConfig(
+                externalCaptureMode = ExternalCaptureMode.ImageCapture,
+                debugSettings = DebugSettings()
+            )
+        )
+    }
+
+    @Test
     fun cameraLaunchConfigProvider_setIntent_nullIntent_doesNotUpdate() {
         val provider = CameraLaunchConfigProvider()
         val originalConfig = provider.config.value

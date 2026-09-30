@@ -89,11 +89,11 @@ class CameraLaunchConfigProvider @Inject constructor() {
     /**
      * Updates the configuration by parsing the provided [intent].
      */
-    fun setIntent(intent: Intent?) {
+    fun setIntent(intent: Intent?, allowDebugSettings: Boolean = true) {
         if (intent == null) return
         _config.value = CameraLaunchConfig(
             externalCaptureMode = intent.toExternalCaptureMode(),
-            debugSettings = intent.toDebugSettings()
+            debugSettings = if (allowDebugSettings) intent.toDebugSettings() else DebugSettings()
         )
     }
 

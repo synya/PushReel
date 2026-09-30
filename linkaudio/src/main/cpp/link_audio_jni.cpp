@@ -235,6 +235,7 @@ std::optional<std::int64_t> elapsedRealtimeUsForRead(
   }
 
   if (timingMappingLog) {
+#if PUSHREEL_NATIVE_DIAGNOSTICS
     const auto currentRawUs = static_cast<std::int64_t>(
         instance.link.clock().micros().count());
     const auto presentationLatenessUs =
@@ -276,6 +277,14 @@ std::optional<std::int64_t> elapsedRealtimeUsForRead(
         timingMappingLog->fallbackActive ? 1 : 0,
         timingMappingLog->fallbackEntered ? 1 : 0,
         timingMappingLog->fallbackReanchored ? 1 : 0);
+#else
+    if (timingMappingLog->fallbackEntered) {
+      __android_log_print(
+          ANDROID_LOG_WARN,
+          "PushReelLinkAudio",
+          "Link timing metadata is stale; using the received PCM timeline");
+    }
+#endif
   }
 
   std::int64_t result{};

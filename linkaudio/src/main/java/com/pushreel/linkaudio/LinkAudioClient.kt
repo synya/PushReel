@@ -362,7 +362,7 @@ internal class LinkAudioDelegate(
             request.result.complete(result)
         } catch (error: Exception) {
             reportError(error)
-            request.result.complete(EMPTY_PCM_READ)
+            request.result.completeExceptionally(error)
         }
     }
 

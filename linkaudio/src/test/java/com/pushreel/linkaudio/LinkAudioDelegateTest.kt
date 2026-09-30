@@ -201,6 +201,38 @@ class LinkAudioDelegateTest {
     }
 
     @Test
+    fun nativeReadFailurePropagatesToCallerAndActorContinues() = runTest {
+        val native = FakeNativeBridge()
+        val delegate = createDelegate(native)
+        runCurrent()
+        try {
+            val failure = IllegalStateException("native read failed")
+            native.readFailure = failure
+
+            val failedRead = async(start = CoroutineStart.UNDISPATCHED) {
+                runCatching { delegate.readPcmFrames(ShortArray(2), 1) }
+            }
+            runCurrent()
+
+            assertThat(failedRead.await().exceptionOrNull())
+                .isInstanceOf(IllegalStateException::class.java)
+            assertThat(failedRead.await().exceptionOrNull()).hasMessageThat()
+                .contains("native read failed")
+            assertThat(delegate.status.value.error).contains("native read failed")
+
+            native.readFailure = null
+            val nextRead = async(start = CoroutineStart.UNDISPATCHED) {
+                delegate.readPcmFrames(ShortArray(2), 1)
+            }
+            runCurrent()
+            assertThat(nextRead.await().framesRead).isEqualTo(0)
+        } finally {
+            delegate.close()
+            runCurrent()
+        }
+    }
+
+    @Test
     fun cancellationDoesNotReleaseDestinationBeforeNativeReadCompletes() = runTest {
         val native = FakeNativeBridge()
         val delegate = createDelegate(native)
@@ -353,6 +385,7 @@ private class FakeNativeBridge : NativeBridge {
     var failChannels = false
     var disableFailuresRemaining = 0
     var readResult: LongArray? = null
+    var readFailure: Exception? = null
     var discardedFrames = 0L
     var peakResult = longArrayOf(0, 0, 0)
 
@@ -394,6 +427,7 @@ private class FakeNativeBridge : NativeBridge {
         requestedFrames: Int
     ): LongArray? {
         operations += "read:$requestedFrames"
+        readFailure?.let { throw it }
         if (destination.size >= 2) {
             destination[0] = 101
             destination[1] = 202

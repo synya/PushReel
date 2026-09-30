@@ -40,13 +40,44 @@ android {
         testInstrumentationRunnerArguments["clearPackageData"] = "true"
     }
 
+    val releaseStoreFile = providers.environmentVariable("PUSHREEL_RELEASE_STORE_FILE").orNull
+    val releaseStorePassword =
+        providers.environmentVariable("PUSHREEL_RELEASE_STORE_PASSWORD").orNull
+    val releaseKeyAlias = providers.environmentVariable("PUSHREEL_RELEASE_KEY_ALIAS").orNull
+    val releaseKeyPassword =
+        providers.environmentVariable("PUSHREEL_RELEASE_KEY_PASSWORD").orNull
+    val hasReleaseSigning = listOf(
+        releaseStoreFile,
+        releaseStorePassword,
+        releaseKeyAlias,
+        releaseKeyPassword
+    ).all { !it.isNullOrBlank() }
+
+    signingConfigs {
+        if (hasReleaseSigning) {
+            create("pushreelRelease") {
+                storeFile = file(requireNotNull(releaseStoreFile))
+                storePassword = releaseStorePassword
+                keyAlias = releaseKeyAlias
+                keyPassword = releaseKeyPassword
+            }
+        }
+    }
+
     buildTypes {
         getByName("debug") {
             signingConfig = signingConfigs.getByName("debug")
         }
         getByName("release") {
             isMinifyEnabled = true
-            proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"))
+            isShrinkResources = true
+            if (hasReleaseSigning) {
+                signingConfig = signingConfigs.getByName("pushreelRelease")
+            }
+            proguardFiles(
+                getDefaultProguardFile("proguard-android-optimize.txt"),
+                "proguard-rules.pro"
+            )
         }
         create("benchmark") {
             initWith(buildTypes.getByName("release"))

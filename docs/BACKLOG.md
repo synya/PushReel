@@ -75,13 +75,19 @@ Last reviewed: 2026-09-30. This file records agreed product work and its verific
    already exist in pieces. Test a real mid-recording disconnect and ensure recording
    leaves its active state, finalizes or cleans up deterministically, reports a clear
    error, and never silently switches to the phone microphone.
+   **Status:** native PCM read/decode/status exceptions now reach the recording
+   controller as errors instead of appearing as empty PCM reads. The actor remains
+   available for a subsequent attempt. Unit tests pass; real Push disconnect and
+   recovery remain to be verified.
 
 5. **Replace the inherited launcher icon.** The proposed direction is one minimal
    record mark with two stereo bars on a dark background. Have the UI Designer prepare
    two or three vector variations and review them at launcher size before selecting
    one. Replace the existing adaptive foreground/background, themed monochrome, and
    legacy raster assets consistently; check safe-zone clipping and legibility on the
-   physical phone. No design has been selected or implemented yet.
+   physical phone. **Status:** the selected dark stereo-bars/record-mark design now
+   replaces adaptive, monochrome, legacy density, and Play Store assets. Raster sizes
+   and adaptive safe zone were checked; launcher appearance awaits a phone check.
 
 6. **Prepare an installable release build before distribution.** The `release` build
    type and R8 minification already exist; do not add an `internal` flavor by default.
@@ -91,6 +97,13 @@ Last reviewed: 2026-09-30. This file records agreed product work and its verific
    verbose Kotlin/native Link and codec logs and debug UI. Verify resource shrinking,
    native symbol packaging, versionCode/versionName, third-party license notices,
    CameraX/JNI behavior under R8, and a complete Link Audio recording in release.
+   **Status:** resource shrinking, JNI preservation, debug-only profileability and
+   launch diagnostics, and optional environment-based signing are configured. A
+   clean `stableRelease` build passed R8 and lint; APK manifest inspection confirmed
+   that profileability is absent from release. The unsigned APK cannot be installed
+   and runtime behavior remains unverified. Current version
+   values remain `1` / `0.1.0`; choose distribution version and signing key before
+   release. Native timing INFO logs are now debug-only; release retains WARN/ERROR.
 
 ## Deferred or already covered
 
@@ -111,8 +124,8 @@ Last reviewed: 2026-09-30. This file records agreed product work and its verific
 
 ## Recommended sequence
 
-The peak meter, mode persistence, and screen-awake behavior are implemented. Next,
-use the debug files from a Push 3 SA recording session to investigate any Stop errors
-and test mid-recording disconnect handling. Develop the icon design, then prepare and
-device-test the release build before distribution. Revisit synchronization only if a
-future Push 3 test reveals a measurable offset.
+The peak meter, mode persistence, screen-awake behavior, icon, and initial release
+configuration are implemented. Next, use the debug files from a Push 3 SA recording
+session to investigate any Stop errors and test mid-recording disconnect handling.
+Then verify a signed, minified release on the phone before distribution. Revisit
+synchronization only if a future Push 3 test reveals a measurable offset.

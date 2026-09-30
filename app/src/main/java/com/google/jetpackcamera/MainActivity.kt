@@ -94,7 +94,7 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         enableEdgeToEdge()
         super.onCreate(savedInstanceState)
-        cameraLaunchConfigProvider.setIntent(intent)
+        cameraLaunchConfigProvider.setIntent(intent, allowDebugSettings = BuildConfig.DEBUG)
         var uiState: MainActivityUiState by mutableStateOf(Loading)
 
         lifecycleScope.launch {
@@ -118,7 +118,8 @@ class MainActivity : ComponentActivity() {
             }
         }
 
-        val disableAnimations = intent?.getBooleanExtra(KEY_DISABLE_ANIMATIONS, false) ?: false
+        val disableAnimations = BuildConfig.DEBUG &&
+            (intent?.getBooleanExtra(KEY_DISABLE_ANIMATIONS, false) ?: false)
         Log.d(TAG, "LocalDisableAnimations: $disableAnimations")
 
         setContent {
