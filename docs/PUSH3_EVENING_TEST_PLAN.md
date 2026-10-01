@@ -27,11 +27,17 @@ device logs and media after the user finishes.
    without flashing to empty between notes. Raise the signal enough to inspect the
    fixed green, yellow, and red regions if practical; avoid intentional clipping.
 3. **Link loss while recording:** Start a short recording with audible `Main`, then
-   disable Link Audio on Push (or otherwise stop advertising that channel). Confirm
-   that PushReel leaves the recording state, reports an error, and does not silently
-   switch to the phone microphone. Re-enable Link, reselect `Main` if needed, and
-   attempt another normal recording without restarting PushReel.
-4. **Recovery after a Stop error:** If any recording reports an error after Stop,
+   disable Link Audio on Push (or otherwise stop advertising that channel). The
+   expected new behavior is that PushReel stops automatically and saves the captured
+   part as an MP4 with the original Push audio, with no phone-microphone fallback. If
+   recording remains active after about 10 seconds, press Stop once and note it.
+   Check whether the saved clip plays in Gallery.
+4. **Discovery recovery:** Leave the camera's Link switch on, re-enable Link Audio
+   on Push, and wait up to one minute. The channel list should populate without
+   toggling Link on the camera. Select the returned `Main` yourself, then make
+   another short recording without restarting PushReel. The app must not silently
+   select a possibly different channel after reconnection.
+5. **Recovery after a Stop error:** If any recording reports an error after Stop,
    attempt one more short recording before restarting the app. Note whether it fails
    again. The debug files capture the stop barrier, AAC, muxer, and shared video
    output state across attempts.

@@ -281,6 +281,36 @@ class PushReelRecordingSessionTest {
     }
 
     @Test
+    fun linkSourceLoss_afterUsablePcmRequestsGracefulStop() {
+        assertThat(audioSourceInvalidationCompletion(48_000, "Main disappeared"))
+            .isEqualTo(AudioEncoderCompletion.SOURCE_INVALIDATED)
+        assertThat(
+            recordingStoppingElapsedTimeNanos(
+                reason = RecordingStopReason.SOURCE_INVALIDATED,
+                maxDurationMillis = 120_000,
+                originUs = 1_000_000,
+                cutoffUs = 11_000_000
+            )
+        ).isEqualTo(10_000_000_000L)
+
+        val barrier = VideoStopBarrier()
+        assertThat(barrier.observe(10_500_000)).isTrue()
+        assertThat(barrier.request(11_000_000)).isFalse()
+        assertThat(barrier.observe(11_000_000)).isTrue()
+        assertThat(barrier.observe(11_033_333)).isFalse()
+    }
+
+    @Test
+    fun linkSourceLoss_beforeUsablePcmRemainsFailure() {
+        val failure = assertThrows(IllegalStateException::class.java) {
+            audioSourceInvalidationCompletion(0, "Main disappeared")
+        }
+
+        assertThat(failure).hasMessageThat().contains("before usable PCM")
+        assertThat(failure).hasMessageThat().contains("Main disappeared")
+    }
+
+    @Test
     fun recordingVideoSnapshot_requiresReadyOrientation() {
         assertThrows(IllegalStateException::class.java) {
             recordingVideoSnapshot(

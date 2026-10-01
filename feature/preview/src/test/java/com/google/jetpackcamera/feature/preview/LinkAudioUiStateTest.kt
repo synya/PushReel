@@ -30,6 +30,8 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.advanceUntilIdle
+import kotlinx.coroutines.test.advanceTimeBy
+import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import org.junit.Test
 
@@ -165,9 +167,172 @@ class LinkAudioUiStateTest {
         scope.advanceUntilIdle()
 
         client.status.value = client.status.value.copy(channels = emptyList())
-        scope.advanceUntilIdle()
+        scope.runCurrent()
 
         assertThat(client.selectedChannelIds.last()).isNull()
+    }
+
+    @Test
+    fun vanishedChannelsRestartDiscoveryAndRestoredChannelsAreNotAutoSelected() {
+        val scope = TestScope(StandardTestDispatcher())
+        val client = FakeLinkAudioClient()
+        val controller = DefaultLinkAudioController(client)
+        val uiState = controller.uiState(scope)
+        controller.onStart()
+        controller.setEnabled(true)
+        client.status.value = client.status.value.copy(channels = listOf(channel))
+        controller.selectChannel(channel.id)
+        scope.runCurrent()
+
+        client.status.value = client.status.value.copy(channels = emptyList())
+        scope.runCurrent()
+        assertThat(uiState.value.selectedChannelId).isNull()
+        assertThat(client.selectedChannelIds.last()).isNull()
+        assertThat(client.enabledRequests).containsExactly(true)
+
+        scope.advanceTimeBy(3_000)
+        scope.runCurrent()
+        assertThat(client.enabledRequests).containsExactly(true, false, true).inOrder()
+
+        client.status.value = client.status.value.copy(channels = listOf(channel))
+        scope.runCurrent()
+        assertThat(uiState.value.channels).containsExactly(channel)
+        assertThat(uiState.value.selectedChannelId).isNull()
+        scope.advanceTimeBy(60_000)
+        scope.runCurrent()
+        assertThat(client.enabledRequests).containsExactly(true, false, true).inOrder()
+    }
+
+    @Test
+    fun manualOffAndLifecycleStopCancelRecovery() {
+        val scope = TestScope(StandardTestDispatcher())
+        val client = FakeLinkAudioClient()
+        val controller = DefaultLinkAudioController(client)
+        controller.uiState(scope)
+        controller.onStart()
+        controller.setEnabled(true)
+        client.status.value = client.status.value.copy(channels = listOf(channel))
+        scope.runCurrent()
+        client.status.value = client.status.value.copy(channels = emptyList())
+        scope.runCurrent()
+
+        controller.setEnabled(false)
+        scope.advanceTimeBy(60_000)
+        scope.runCurrent()
+        assertThat(client.enabledRequests).containsExactly(true, false).inOrder()
+
+        controller.setEnabled(true)
+        client.status.value = client.status.value.copy(channels = listOf(channel))
+        scope.runCurrent()
+        client.status.value = client.status.value.copy(channels = emptyList())
+        scope.runCurrent()
+        controller.onStop()
+        scope.advanceTimeBy(60_000)
+        scope.runCurrent()
+        assertThat(client.enabledRequests).containsExactly(true, false, true, false).inOrder()
+    }
+
+    @Test
+    fun lossOfOneChannelDoesNotRestartDiscoveryWhileOtherChannelsRemain() {
+        val scope = TestScope(StandardTestDispatcher())
+        val client = FakeLinkAudioClient()
+        val controller = DefaultLinkAudioController(client)
+        controller.uiState(scope)
+        controller.onStart()
+        controller.setEnabled(true)
+        controller.selectChannel(channel.id)
+        client.status.value = client.status.value.copy(channels = listOf(channel))
+        scope.runCurrent()
+        client.status.value = client.status.value.copy(
+            channels = listOf(channel.copy(id = "another-channel", name = "Cue"))
+        )
+        scope.runCurrent()
+
+        scope.advanceTimeBy(60_000)
+        scope.runCurrent()
+        assertThat(client.selectedChannelIds.last()).isNull()
+        assertThat(client.enabledRequests).containsExactly(true)
+    }
+
+    @Test
+    fun delayedNativeDisableDoesNotGetCoalescedWithEnable() {
+        val scope = TestScope(StandardTestDispatcher())
+        val client = FakeLinkAudioClient()
+        val controller = DefaultLinkAudioController(client)
+        controller.uiState(scope)
+        controller.onStart()
+        controller.setEnabled(true)
+        client.status.value = client.status.value.copy(channels = listOf(channel))
+        scope.runCurrent()
+        client.status.value = client.status.value.copy(channels = emptyList())
+        scope.runCurrent()
+
+        client.autoApplyEnabledStatus = false
+        scope.advanceTimeBy(6_000)
+        scope.runCurrent()
+        assertThat(client.enabledRequests).containsExactly(true, false).inOrder()
+
+        client.status.value = client.status.value.copy(linkEnabled = false, linkAudioEnabled = false)
+        scope.advanceTimeBy(6_000)
+        scope.runCurrent()
+        assertThat(client.enabledRequests).containsExactly(true, false, true).inOrder()
+    }
+
+    @Test
+    fun manualOffAfterDisableTimeoutNeverQueuesRecoveryEnable() {
+        val scope = TestScope(StandardTestDispatcher())
+        val client = FakeLinkAudioClient()
+        val controller = DefaultLinkAudioController(client)
+        controller.uiState(scope)
+        controller.onStart()
+        controller.setEnabled(true)
+        client.status.value = client.status.value.copy(channels = listOf(channel))
+        scope.runCurrent()
+        client.status.value = client.status.value.copy(channels = emptyList())
+        scope.runCurrent()
+
+        client.autoApplyEnabledStatus = false
+        scope.advanceTimeBy(6_000)
+        scope.runCurrent()
+        controller.setEnabled(false)
+        scope.advanceTimeBy(60_000)
+        scope.runCurrent()
+        assertThat(client.enabledRequests).containsExactly(true, false, false).inOrder()
+    }
+
+    @Test
+    fun delayedNativeEnableCannotBeCoalescedWithNextDisable() {
+        val scope = TestScope(StandardTestDispatcher())
+        val client = FakeLinkAudioClient()
+        val controller = DefaultLinkAudioController(client)
+        controller.uiState(scope)
+        controller.onStart()
+        controller.setEnabled(true)
+        client.status.value = client.status.value.copy(channels = listOf(channel))
+        scope.runCurrent()
+        client.status.value = client.status.value.copy(channels = emptyList())
+        scope.runCurrent()
+
+        client.autoApplyEnabledStatus = false
+        scope.advanceTimeBy(3_000)
+        scope.runCurrent()
+        client.status.value = client.status.value.copy(linkEnabled = false, linkAudioEnabled = false)
+        scope.runCurrent()
+        assertThat(client.enabledRequests).containsExactly(true, false, true).inOrder()
+
+        scope.advanceTimeBy(9_000)
+        scope.runCurrent()
+        assertThat(client.enabledRequests).containsExactly(true, false, true, true).inOrder()
+
+        client.status.value = client.status.value.copy(linkEnabled = true, linkAudioEnabled = true)
+        scope.runCurrent()
+        scope.advanceTimeBy(12_000)
+        scope.runCurrent()
+        assertThat(client.enabledRequests).containsExactly(true, false, true, true).inOrder()
+        scope.advanceTimeBy(24_000)
+        scope.runCurrent()
+        assertThat(client.enabledRequests).containsExactly(true, false, true, true, false)
+            .inOrder()
     }
 
     @Test
@@ -451,8 +616,18 @@ private class FakeLinkAudioClient : LinkAudioClientFacade {
     var discardedFrames = 1_024L
     var nextRead = LinkAudioPcmRead(framesRead = 0, metadata = null)
     var readError: Exception? = null
+    val enabledRequests = mutableListOf<Boolean>()
+    var autoApplyEnabledStatus = true
 
-    override fun setEnabled(enabled: Boolean) = Unit
+    override fun setEnabled(enabled: Boolean) {
+        enabledRequests += enabled
+        if (!autoApplyEnabledStatus) return
+        status.value = status.value.copy(
+            linkEnabled = enabled,
+            linkAudioEnabled = enabled,
+            channels = if (enabled) status.value.channels else emptyList()
+        )
+    }
     override fun selectChannel(channelId: String?) {
         selectedChannelIds += channelId
     }

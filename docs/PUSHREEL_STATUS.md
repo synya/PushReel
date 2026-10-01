@@ -76,9 +76,13 @@ After the recovery build was installed, the user confirmed that a short physical
 recording with Link enabled and Ableton Live on a laptop saved successfully and contains
 audio. Synchronization sounded plausible, but that test could not establish the offset.
 The user later tested with Push 3 SA and reported recorded sound with no perceptible
-A/V delay. Some recordings ended with an error after Stop, and later attempts kept
-failing until app restart; their old Logcat evidence is no longer available. A
-persistent debug recording log is available for the next test. The
+A/V delay. A subsequent five-attempt test produced three successful MP4s and two
+failures caused by deliberate Link Audio disconnects. The debug files in
+`Downloads/PushReel` show that the selected channel was invalidated after AAC and
+video samples had already been captured; coroutine cancellation then aborted the
+muxer and deleted the pending media item. A later recording succeeded without an
+app restart. The previous intermittent post-Stop failures were not reproduced in
+this test. The
 Ableton Link submodule was updated to `13c5744`; whether that upstream change contributed
 to the successful recording is not established.
 
@@ -96,12 +100,13 @@ An accessibility wording tweak for TalkBack was built and installed for Android
 `userId 0`; TalkBack output has not been device-tested.
 After a Push 3 SA test, the user reported meter blinking despite working audio and
 some recordings failing after Stop until app restart. The meter now uses fast visual
-attack and 300 ms decay, with fixed green/yellow/red height bands; it remains a peak
+attack and 180 ms decay, with fixed green/yellow/red height bands; it remains a peak
 meter, not an RMS calculation. Debug Link recordings now create a bounded diagnostic
 text file in `Downloads/PushReel`, including Stop, AAC, muxer, video-output state,
 and a full terminal failure stack. Host tests and the debug APK build passed, and the
-APK was installed only for Android `userId 0`. Meter smoothing and file logging still
-need a Push 3 SA device test.
+APK was installed only for Android `userId 0`. The user confirmed on Push 3 SA that
+the bars no longer blink; the shortened 180 ms decay awaits device feedback. The
+debug files captured the deliberate Link loss and the exact muxer abort path.
 Photo/Video mode persistence and screen-awake behavior during recording are implemented.
 A clean debug build and relevant tests passed, and the APK was installed only for
 Android `userId 0`. The user verified Photo/Video restoration after closing and
@@ -117,10 +122,14 @@ PCM read failure now propagates as a recording error instead of masquerading as 
 underrun. Clean debug and unsigned release builds passed, including R8/resource
 shrinking and release lint; targeted unit tests passed. The debug APK was installed
 only for Android `userId 0`, launched to a resumed activity, and produced no
-filtered startup errors in Logcat. The launcher appearance awaits a user check.
-Test mid-recording
-Link loss and post-Stop recovery with Push 3 SA using
-[PUSH3_EVENING_TEST_PLAN.md](PUSH3_EVENING_TEST_PLAN.md). A signed release recording
+filtered startup errors in Logcat. The user confirmed the new launcher icon and
+camera startup on the phone. A fix for source-loss finalization and automatic
+rediscovery is built and covered by focused host tests. Source loss after usable PCM
+now ends AAC and publishes the MP4; loss before usable audio remains an error. Link
+discovery retries after previously visible channels vanish, while the user chooses
+the returned channel. The controller waits for native disable and enable
+acknowledgements, including delayed responses. Both behaviors require another Push 3
+SA test. A signed release recording
 remains a separate distribution gate. Release signing and build steps are documented
 in [RELEASE.md](RELEASE.md).
 

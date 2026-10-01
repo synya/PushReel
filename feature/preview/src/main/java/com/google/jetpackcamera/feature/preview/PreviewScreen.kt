@@ -1210,7 +1210,7 @@ private fun rememberSmoothedPeakLevel(peak: Int, ready: Boolean, channelId: Stri
         if (!ready || target >= level.value) {
             level.snapTo(target)
         } else {
-            level.animateTo(target, animationSpec = tween(durationMillis = 300))
+            level.animateTo(target, animationSpec = tween(durationMillis = 180))
         }
     }
     return if (ready) level.value else 0f

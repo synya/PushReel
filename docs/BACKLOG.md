@@ -13,8 +13,11 @@ Last reviewed: 2026-09-30. This file records agreed product work and its verific
   seen earlier: that value is not the physical network/audio delay.
 - Several Push 3 SA recordings ended with an error after Stop. Errors then recurred
   on later attempts until the app was restarted; their old Logcat evidence is
-  unavailable. A debug-only per-recording diagnostic file is now available in
-  Downloads; investigate stop/finalization and state reuse after the next device test.
+  unavailable. The next Push 3 SA test recorded several good MP4s without audible
+  A/V offset. Two deliberate Link Audio disconnects failed because a disappearing
+  selected channel invalidated the PCM reader; the recording coroutine then cancelled
+  the muxer and deleted an otherwise valid capture. A later recording succeeded without
+  restarting the app. Per-attempt evidence is in Downloads/PushReel on the phone.
 - Preserve successful MP4 recording while making usability changes. Longer recordings,
   Gallery playback, mid-recording disconnect, and background/foreground behavior still
   need explicit device verification.
@@ -42,7 +45,9 @@ Last reviewed: 2026-09-30. This file records agreed product work and its verific
    recording works. The visual envelope now rises immediately and decays over 300 ms
    across empty 50 ms peak windows. The underlying measurement remains peak, not RMS.
    Fixed green/yellow/red bands replace recoloring an entire bar. The debug APK was
-   built and installed for Android `userId 0`; recheck appearance on Push 3 SA.
+   built and installed for Android `userId 0`. The user confirmed no blinking with
+   Push 3 SA but found the motion slightly too slow. The visual fall time has been
+   shortened from 300 to 180 ms; recheck after the next install.
 
 1a. **Persist debug recording diagnostics.** One bounded text file per Link recording
     is now written to `Downloads/PushReel` in debug builds. It includes start, source
@@ -75,10 +80,17 @@ Last reviewed: 2026-09-30. This file records agreed product work and its verific
    already exist in pieces. Test a real mid-recording disconnect and ensure recording
    leaves its active state, finalizes or cleans up deterministically, reports a clear
    error, and never silently switches to the phone microphone.
-   **Status:** native PCM read/decode/status exceptions now reach the recording
-   controller as errors instead of appearing as empty PCM reads. The actor remains
-   available for a subsequent attempt. Unit tests pass; real Push disconnect and
-   recovery remain to be verified.
+   **Status:** native PCM read/decode/status exceptions reach the recording controller
+   as errors instead of appearing as empty PCM reads. The actor remains available for
+   a subsequent attempt. The real Push disconnect test reproduced a separate gap:
+   source invalidation aborted and deleted a recording with usable audio/video.
+   The recording session now completes AAC with EOS and commits the captured MP4 on
+   source loss after usable PCM was queued; loss before usable PCM still fails rather
+   than publishing an invalid file. The Link controller retries native discovery
+   after an empty channel list, waiting for both disable and enable acknowledgements
+   so actor command coalescing cannot skip a restart. It leaves channel selection to
+   the user. Focused tests and debug APK build pass; both paths require another Push
+   device test.
 
 5. **Replace the inherited launcher icon.** The proposed direction is one minimal
    record mark with two stereo bars on a dark background. Have the UI Designer prepare

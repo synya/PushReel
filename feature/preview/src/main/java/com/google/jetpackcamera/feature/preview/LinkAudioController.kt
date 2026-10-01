@@ -38,11 +38,17 @@ import java.io.Closeable
 import javax.inject.Inject
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 
 data class LinkAudioUiState(
     val requestedEnabled: Boolean = false,
@@ -76,9 +82,13 @@ class DefaultLinkAudioController internal constructor(
     private val requestedEnabled = MutableStateFlow(false)
     private val selectedChannelId = MutableStateFlow<String?>(null)
     private val selectionError = MutableStateFlow<String?>(null)
+    private val lifecycleActive = MutableStateFlow(false)
     private var lifecycleStarted = false
+    private var recoveryMonitor: Job? = null
 
-    override fun uiState(scope: CoroutineScope): StateFlow<LinkAudioUiState> = combine(
+    override fun uiState(scope: CoroutineScope): StateFlow<LinkAudioUiState> {
+        if (recoveryMonitor == null) recoveryMonitor = scope.launch { monitorDiscovery() }
+        return combine(
         combine(client.status, client.pcmStatus, client.peakLevels, ::Triple),
         requestedEnabled,
         selectedChannelId,
@@ -104,9 +114,83 @@ class DefaultLinkAudioController internal constructor(
         started = SharingStarted.Eagerly,
         initialValue = LinkAudioUiState()
     )
+    }
+
+    private suspend fun CoroutineScope.monitorDiscovery() {
+        var hadChannels = false
+        var recovery: Job? = null
+        combine(client.status, requestedEnabled, lifecycleActive, ::Triple).collect {
+                (status, requested, active) ->
+            if (!requested || !active) {
+                hadChannels = false
+                recovery?.cancel()
+                recovery = null
+            } else if (status.channels.isNotEmpty()) {
+                hadChannels = true
+                recovery?.cancel()
+                recovery = null
+            } else if (hadChannels && recovery?.isActive != true) {
+                recovery = launch { recoverDiscovery() }
+            }
+        }
+    }
+
+    private suspend fun recoverDiscovery() {
+        var waitMillis = DISCOVERY_RETRY_INITIAL_MILLIS
+        var phase = DiscoveryRecoveryPhase.Ready
+        try {
+            while (requestedEnabled.value && lifecycleActive.value &&
+                client.status.value.channels.isEmpty()
+            ) {
+                delay(waitMillis)
+                if (!requestedEnabled.value || !lifecycleActive.value ||
+                    client.status.value.channels.isNotEmpty()
+                ) break
+                // The actor coalesces adjacent control requests. Observe each applied state
+                // before requesting its opposite, including the enable before the next retry.
+                when (phase) {
+                    DiscoveryRecoveryPhase.Ready,
+                    DiscoveryRecoveryPhase.Disabling -> {
+                        if (phase == DiscoveryRecoveryPhase.Ready ||
+                            !client.status.value.isDisabled()
+                        ) client.setEnabled(false)
+                        phase = DiscoveryRecoveryPhase.Disabling
+                        val disabled = withTimeoutOrNull(DISCOVERY_CONTROL_TIMEOUT_MILLIS) {
+                            client.status.first { it.isDisabled() }
+                        } != null
+                        if (disabled && requestedEnabled.value && lifecycleActive.value &&
+                            client.status.value.channels.isEmpty()
+                        ) {
+                            client.setEnabled(true)
+                            phase = DiscoveryRecoveryPhase.Enabling
+                        }
+                    }
+                    DiscoveryRecoveryPhase.Enabling -> {
+                        if (!client.status.value.isEnabled()) client.setEnabled(true)
+                        val enabled = withTimeoutOrNull(DISCOVERY_CONTROL_TIMEOUT_MILLIS) {
+                            client.status.first { it.isEnabled() }
+                        } != null
+                        if (enabled) phase = DiscoveryRecoveryPhase.Ready
+                    }
+                }
+                waitMillis = (waitMillis * 2).coerceAtMost(DISCOVERY_RETRY_MAX_MILLIS)
+            }
+        } finally {
+            // A newly discovered channel cancels recovery even if disable was still queued.
+            // Restore the user's requested On state in that case, but respect Off and onStop.
+            if (phase != DiscoveryRecoveryPhase.Ready &&
+                requestedEnabled.value && lifecycleActive.value
+                && (phase == DiscoveryRecoveryPhase.Disabling ||
+                    !client.status.value.isEnabled())
+            ) {
+                client.setEnabled(true)
+            }
+        }
+    }
 
     override fun onStart() {
         lifecycleStarted = true
+        lifecycleActive.value = true
         if (requestedEnabled.value) {
             client.setEnabled(true)
             selectedChannelId.value?.let(client::selectChannel)
@@ -115,6 +199,7 @@ class DefaultLinkAudioController internal constructor(
 
     override fun onStop() {
         lifecycleStarted = false
+        lifecycleActive.value = false
         client.selectChannel(null)
         client.setEnabled(false)
     }
@@ -206,6 +291,8 @@ class DefaultLinkAudioController internal constructor(
     }
 
     override fun close() {
+        lifecycleActive.value = false
+        recoveryMonitor?.cancel()
         client.selectChannel(null)
         client.close()
     }
@@ -240,6 +327,11 @@ private fun LinkAudioClientFacade.matchesSelection(channelId: String, generation
         it.channelSelected && it.selectedChannelId == channelId && it.generation == generation
     }
 
+private fun LinkAudioStatus.isDisabled(): Boolean = !linkEnabled && !linkAudioEnabled
+private fun LinkAudioStatus.isEnabled(): Boolean = linkEnabled && linkAudioEnabled
+
+private enum class DiscoveryRecoveryPhase { Ready, Disabling, Enabling }
+
 private fun LinkAudioPcmRead.toRecordingPcmRead(): RecordingPcmReadResult {
     val metadata = metadata
     if (framesRead <= 0 || metadata == null) return RecordingPcmReadResult.Underrun
@@ -267,6 +359,9 @@ private fun LinkAudioPcmRead.toRecordingPcmRead(): RecordingPcmReadResult {
 }
 
 private const val LINK_AUDIO_CHANNEL_COUNT = 2
+private const val DISCOVERY_RETRY_INITIAL_MILLIS = 3_000L
+private const val DISCOVERY_RETRY_MAX_MILLIS = 30_000L
+private const val DISCOVERY_CONTROL_TIMEOUT_MILLIS = 3_000L
 
 @Module
 @InstallIn(SingletonComponent::class)

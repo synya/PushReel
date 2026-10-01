@@ -253,6 +253,19 @@ private sealed interface RecordingMessage {
     data object Finish : RecordingMessage
 }
 
+internal enum class AudioEncoderCompletion {
+    STOP_CUTOFF,
+    SOURCE_INVALIDATED
+}
+
+internal fun audioSourceInvalidationCompletion(
+    queuedFrames: Long,
+    reason: String
+): AudioEncoderCompletion {
+    check(queuedFrames > 0L) { "Link Audio source invalidated before usable PCM: $reason" }
+    return AudioEncoderCompletion.SOURCE_INVALIDATED
+}
+
 /** One Link Audio recording, including AAC encoding and the single MediaMuxer writer. */
 internal class PushReelRecordingSession(
     private val context: Context,
@@ -337,7 +350,7 @@ internal class PushReelRecordingSession(
         }
         var attachment: EncodedVideoAttachment? = null
         var writer: Deferred<Uri>? = null
-        var audioEncoder: Deferred<Unit>? = null
+        var audioEncoder: Deferred<AudioEncoderCompletion>? = null
         var durationJob: Job? = null
         try {
             attachment = videoOutput.attachEncodedConsumer(consumer)
@@ -436,7 +449,14 @@ internal class PushReelRecordingSession(
                     failureSignal.onAwait { throw it }
                     durationElapsed.onAwait { stopReason = RecordingStopReason.MAX_DURATION }
                     runningWriter.onAwait { stopReason = RecordingStopReason.OUTPUT_COMPLETED }
-                    runningAudioEncoder.onAwait { stopReason = RecordingStopReason.OUTPUT_COMPLETED }
+                    runningAudioEncoder.onAwait { completion ->
+                        stopReason = when (completion) {
+                            AudioEncoderCompletion.STOP_CUTOFF ->
+                                RecordingStopReason.OUTPUT_COMPLETED
+                            AudioEncoderCompletion.SOURCE_INVALIDATED ->
+                                RecordingStopReason.SOURCE_INVALIDATED
+                        }
+                    }
                 }
             }
             val reason = checkNotNull(stopReason)
@@ -477,7 +497,8 @@ internal class PushReelRecordingSession(
             }
             debugLog?.event("video encoder detached")
             attachment = null
-            runningAudioEncoder.await()
+            val audioCompletion = runningAudioEncoder.await()
+            debugLog?.event("AAC completion=$audioCompletion")
             debugLog?.event("AAC encoder finished")
             firstFailure.get()?.let { throw it }
             messages.send(RecordingMessage.Finish)
@@ -502,7 +523,7 @@ internal class PushReelRecordingSession(
         originUs: Long,
         stopCutoffUs: AtomicLong,
         messages: Channel<RecordingMessage>
-    ) = withContext(dispatcher) {
+    ): AudioEncoderCompletion = withContext(dispatcher) {
         val codec = MediaCodec.createEncoderByType(AAC_MIME_TYPE)
         var dataReads = 0L
         var droppedWindows = 0L
@@ -542,6 +563,7 @@ internal class PushReelRecordingSession(
             val stalePcmFastForward = StalePcmFastForward()
             var stopDeadlineUs: Long? = null
             var reachedStopCutoff = false
+            var completion = AudioEncoderCompletion.STOP_CUTOFF
             while (!reachedStopCutoff) {
                 val cutoffUs = stopCutoffUs.get().takeUnless { it == STOP_NOT_REQUESTED_US }
                 if (cutoffUs != null && stopDeadlineUs == null) {
@@ -624,8 +646,15 @@ internal class PushReelRecordingSession(
                         }
                         delay(2)
                     }
-                    is RecordingPcmReadResult.SourceInvalidated ->
-                        error("Link Audio source invalidated: ${read.reason}")
+                    is RecordingPcmReadResult.SourceInvalidated -> {
+                        completion = audioSourceInvalidationCompletion(queuedFrames, read.reason)
+                        debugLog?.event(
+                            "Link Audio source invalidated after queuedFrames=$queuedFrames: " +
+                                read.reason
+                        )
+                        Log.w(RECORDING_TAG, "Link Audio source invalidated: ${read.reason}")
+                        reachedStopCutoff = true
+                    }
                     is RecordingPcmReadResult.InvalidTiming -> {
                         invalidTimingReads++
                         val nowUs = elapsedRealtimeUs()
@@ -647,6 +676,7 @@ internal class PushReelRecordingSession(
             }
             queueAudioEndOfStream(codec)
             drainAudio(codec, messages, endOfStream = true)
+            completion
         } finally {
             debugLog?.event(
                 "AAC encoder stopped dataReads=$dataReads droppedWindows=$droppedWindows " +
@@ -744,7 +774,8 @@ internal class PushReelRecordingSession(
 internal enum class RecordingStopReason {
     MANUAL,
     MAX_DURATION,
-    OUTPUT_COMPLETED
+    OUTPUT_COMPLETED,
+    SOURCE_INVALIDATED
 }
 
 internal fun recordingStoppingElapsedTimeNanos(
@@ -755,7 +786,8 @@ internal fun recordingStoppingElapsedTimeNanos(
 ): Long = when (reason) {
     RecordingStopReason.MAX_DURATION -> maxDurationMillis * 1_000_000L
     RecordingStopReason.MANUAL,
-    RecordingStopReason.OUTPUT_COMPLETED -> (cutoffUs - originUs) * 1_000L
+    RecordingStopReason.OUTPUT_COMPLETED,
+    RecordingStopReason.SOURCE_INVALIDATED -> (cutoffUs - originUs) * 1_000L
 }.coerceAtLeast(0L)
 
 internal fun recordingDeadlineUs(originUs: Long, maxDurationMillis: Long): Long? {
