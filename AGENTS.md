@@ -249,6 +249,15 @@ Pass `-Serial <device-serial>` when more than one Android device is connected. D
 entry point because it installs for Android `userId 0` and verifies that PushReel is not installed
 for Samsung Dual App, Secure Folder, or any other additional Android profile.
 
+### Device Storage Hygiene
+
+Do not write development diagnostics, screenshots, logs, or temporary files to the root
+of shared phone storage (`/sdcard` or `/storage/emulated/0`). Keep host-side diagnostics
+in the host workspace or temporary directory. The app's completed photos and videos
+belong in `DCIM/Camera` through MediaStore; debug recording logs belong in
+`Downloads/PushReel`. Inspect existing files before cleanup and remove only artifacts
+that are positively identified as obsolete development output.
+
 ### Product Scope
 
 Build the actual PushReel application from the beginning.

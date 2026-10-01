@@ -212,6 +212,13 @@ confirmed a saved Link Audio video with audible external audio on the physical p
 The standalone `spotlessCheck` task is unavailable in the current Gradle configuration;
 `git diff --check` passed.
 
+On 2026-10-01, shared-storage root was audited after the user noticed loose files.
+All 29 root XML files were obsolete UI hierarchy dumps and `pushreel-screen.png` was
+a diagnostic screenshot, dated September 17–23; these 30 files were removed and the
+root was rechecked. Current PushReel MP4s remain in `DCIM/Camera`, and debug attempt
+logs remain in `Download/PushReel`. Current app paths do not write to shared-storage
+root. `AGENTS.md` now prohibits putting development diagnostics there.
+
 Still to verify manually: measured Push 3 pad-hit A/V offset, sustained recording,
 Link lifecycle across background/foreground transitions, disconnect behavior, and
 Gallery playback after custom finalization.
