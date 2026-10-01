@@ -129,7 +129,9 @@ now ends AAC and publishes the MP4; loss before usable audio remains an error. L
 discovery retries after previously visible channels vanish, while the user chooses
 the returned channel. The controller waits for native disable and enable
 acknowledgements, including delayed responses. Both behaviors require another Push 3
-SA test. A signed release recording
+SA test. The updated debug APK was installed with `scripts/install-debug-owner.ps1`
+only for Android `userId 0`; `MainActivity` resumed and filtered startup Logcat had
+no errors. The user will perform the Push 3 SA regression test later. A signed release recording
 remains a separate distribution gate. Release signing and build steps are documented
 in [RELEASE.md](RELEASE.md).
 
