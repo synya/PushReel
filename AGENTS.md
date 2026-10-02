@@ -361,7 +361,8 @@ reconciled, a stream with metadata more than two seconds behind may anchor its f
 buffer to callback receipt once, then advance only by PCM frame count and sample rate. Reuse
 that anchor for partial reads and do not re-anchor on every packet or count gap. This mode
 restores a usable recording but may retain network latency as A/V offset. It is not considered
-the final synchronization solution; measure the offset with Push 3 before changing it.
+the final synchronization solution. Push 3 SA tests found no perceptible offset;
+change it only after a future test measures a real A/V mismatch.
 
 ### Recording State
 
@@ -657,8 +658,8 @@ Never replace the owner-only installation script with a Gradle install task.
 
 ## Implementation Priorities
 
-The agreed current product priorities and pending device tests are recorded in
-`docs/BACKLOG.md`. Consult that file before selecting the next slice. The sequence below
+The completed product scope and optional follow-ups are recorded in
+`docs/BACKLOG.md`. Consult that file before selecting further work. The sequence below
 describes the original vertical implementation plan and is retained as architecture
 context; it does not override the current backlog.
 

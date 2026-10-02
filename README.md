@@ -8,7 +8,9 @@ records video without Link Audio.
 The current debug build was tested on a physical phone with Push 3 SA. Recordings
 contained sound with no perceptible A/V delay; the L/R meter, source-loss
 handling, and channel rediscovery also passed device checks. The signed `0.1.0`
-release APK has been built but still needs its own phone test.
+release APK was installed on the phone and passed startup and basic operation
+checks. A separate full Link Audio recording with that exact release APK has
+not been documented.
 
 ## Use
 
@@ -46,5 +48,6 @@ key. See [release instructions](docs/RELEASE.md) for details.
 PushReel is derived from Google's
 [Jetpack Camera App](https://github.com/google/jetpack-camera-app). Its existing
 source notices and [Apache 2.0 license](LICENSE) are retained. Ableton Link is
-included as a Git submodule; review its [license](third_party/ableton-link/LICENSE.md)
-before distributing the app.
+included as a Git submodule under its own
+[license](third_party/ableton-link/LICENSE.md). The root Apache license does not
+replace Ableton Link's terms; review both before distributing an APK.

@@ -43,8 +43,11 @@ Gradle's original output is
 uses the generated APK metadata to create the versioned copy only after checking
 its Android signature against the PushReel release certificate.
 The first signed `0.1.0` APK was built on 2026-10-02; R8, resource shrinking,
-vital lint, and Android APK signature verification passed. Its signer certificate
-SHA-256 is `d4a19fddf1001c9d26a3669301ac62d69f2b9d99fd0aa9d7b2bde5c10aaeae5f`.
+vital lint, and Android APK signature verification passed. On the same date it
+was installed on a physical phone and passed startup and basic operation checks.
+A complete Link Audio recording with this exact release APK was not separately
+reported. The signer certificate SHA-256 is
+`d4a19fddf1001c9d26a3669301ac62d69f2b9d99fd0aa9d7b2bde5c10aaeae5f`.
 It can be copied to the phone and opened with Android's package installer; USB
 debugging is not required. The installed debug build uses Android's debug signing
 key, so it cannot be updated in place with this release APK. Uninstall the debug
@@ -52,12 +55,39 @@ app from the primary profile first, then install the release APK. This resets
 app-local settings, including the saved Photo/Video mode; completed Gallery media
 in `DCIM/Camera` is separate from app data. The user controls all phone UI actions.
 
-A successful build and signature verification do not establish that R8/JNI,
-CameraX, Link discovery, recording, and Gallery publishing work on a phone.
+A successful build, signature verification, and startup check do not establish
+that the complete Link Audio recording and Gallery publishing path has passed
+with this exact release APK.
 
-Before wider distribution, review third-party license notices and install and test
-the signed release on the physical phone. Direct installation uses APK; Google Play
-publication would need a separate AAB decision. The first local release has
-versionCode `1` and versionName `0.1.0`; increment versionCode for subsequent
-releases. The debug owner-only installation script is for debug builds and must
-not be used for release.
+Before wider distribution, review third-party license notices and complete an
+end-to-end Link Audio recording check with the signed release. Ableton Link is
+licensed separately from the Apache-licensed camera base; the root `LICENSE`
+does not by itself state the terms for distributing the combined APK. Direct
+installation uses APK; Google Play publication would need a separate AAB
+decision. The first local release has versionCode `1` and versionName `0.1.0`;
+increment versionCode for subsequent releases. The debug owner-only installation
+script is for debug builds and must not be used for release.
+
+## GitHub download
+
+After the distribution-license review, push the final source commit to `main`.
+On GitHub, open **Releases → Draft a new release**, create tag `v0.1.0`
+targeting that commit, title it `PushReel 0.1.0`,
+and attach `push-reel-stable-release-v0.1.0.apk` as a binary asset. Keep APKs
+and signing keys out of Git commits. A GitHub tag alone provides a source
+snapshot, not an installable APK download. Mark this build as a **pre-release**
+if publishing it for others to try before the release-path Link Audio recording
+check is complete.
+
+Release notes should identify the tested device, what the release build was
+actually checked to do, and how to fetch complete source with the Ableton Link
+submodule:
+
+```powershell
+git clone --branch v0.1.0 --recurse-submodules https://github.com/synya/PushReel.git
+```
+
+GitHub creates source archives automatically for a tag, but a recursive clone
+is the documented way to obtain the pinned Link submodule. Keep the Apache and
+Ableton Link license notices available alongside the source. Do not describe
+the root Apache license as covering the combined APK on its own.

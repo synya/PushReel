@@ -19,7 +19,8 @@ across partial reads. If the Link metadata is more than two seconds behind newly
 the current recovery mode anchors the first buffer to receipt time and advances subsequent
 buffers by PCM frame count and sample rate. It does not follow packet arrival jitter. This
 keeps recording usable when absolute Link timing is grossly stale, but can retain network
-latency as A/V offset; measured Push 3 synchronization is still pending.
+latency as A/V offset. Push 3 SA recordings showed no perceptible pad-hit offset;
+a numerical offset measurement has not been made.
 
 For the UI stereo peak meter, the native FIFO also accumulates L/R sample magnitudes from
 incoming PCM in a bounded atomic window. A dedicated JNI snapshot drains only that peak
@@ -32,6 +33,6 @@ standalone FIFO contract test with strict compiler warnings.
 `LinkAudioClient` holds Android's Wi-Fi multicast lock only while Link is enabled. Discovery is
 polled from Kotlin so no JNI callback runs on a Link-managed thread.
 
-Ableton Link is vendored in `third_party/ableton-link` and is dual-licensed under GPLv2+ and a
+Ableton Link is pinned as a submodule in `third_party/ableton-link` and is dual-licensed under GPLv2+ and a
 proprietary Ableton license. See `third_party/ableton-link/LICENSE.md` and preserve its notices when
 distributing PushReel.
