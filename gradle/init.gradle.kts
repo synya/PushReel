@@ -15,7 +15,7 @@
  */
 
 val ktlintVersion = "1.2.1"
-val spotlessRatchetRef = System.getenv("PUSHREEL_SPOTLESS_RATCHET_FROM") ?: "origin/master"
+val spotlessRatchetRef = System.getenv("PUSHREEL_SPOTLESS_RATCHET_FROM") ?: "origin/main"
 
 initscript {
     val spotlessVersion = "6.25.0"

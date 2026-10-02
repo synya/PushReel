@@ -1,9 +1,9 @@
-name: Build Master
+name: Build Main
 
 on:
   push:
     branches:
-      - master
+      - main
 
 concurrency:
   group: build-${{ github.ref }}
