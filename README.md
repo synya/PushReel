@@ -49,5 +49,6 @@ PushReel is derived from Google's
 [Jetpack Camera App](https://github.com/google/jetpack-camera-app). Its existing
 source notices and [Apache 2.0 license](LICENSE) are retained. Ableton Link is
 included as a Git submodule under its own
-[license](third_party/ableton-link/LICENSE.md). The root Apache license does not
-replace Ableton Link's terms; review both before distributing an APK.
+[license](third_party/ableton-link/LICENSE.md). The combined APK is distributed
+under GPLv3; see [licensing and disclaimer](docs/LICENSING.md), including the
+no-warranty and limitation-of-liability notice.

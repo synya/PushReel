@@ -59,10 +59,11 @@ A successful build, signature verification, and startup check do not establish
 that the complete Link Audio recording and Gallery publishing path has passed
 with this exact release APK.
 
-Before wider distribution, review third-party license notices and complete an
-end-to-end Link Audio recording check with the signed release. Ableton Link is
-licensed separately from the Apache-licensed camera base; the root `LICENSE`
-does not by itself state the terms for distributing the combined APK. Direct
+The combined APK is distributed under GPLv3 because it includes Ableton Link.
+Keep the [licensing and disclaimer](LICENSING.md), GPLv3 text, component notices,
+and complete corresponding source available to everyone who downloads the APK.
+The disclaimer states that the app is provided as is without warranty or
+liability to the extent permitted by law. Direct
 installation uses APK; Google Play publication would need a separate AAB
 decision. The first local release has versionCode `1` and versionName `0.1.0`;
 increment versionCode for subsequent releases. The debug owner-only installation
@@ -70,24 +71,25 @@ script is for debug builds and must not be used for release.
 
 ## GitHub download
 
-After the distribution-license review, push the final source commit to `main`.
-On GitHub, open **Releases → Draft a new release**, create tag `v0.1.0`
-targeting that commit, title it `PushReel 0.1.0`,
-and attach `push-reel-stable-release-v0.1.0.apk` as a binary asset. Keep APKs
-and signing keys out of Git commits. A GitHub tag alone provides a source
-snapshot, not an installable APK download. Mark this build as a **pre-release**
-if publishing it for others to try before the release-path Link Audio recording
-check is complete.
+Push the final source commit to `main`. On GitHub, open **Releases → Draft a new
+release**, create tag `v0.1.0` targeting that commit, title it `PushReel 0.1.0`,
+and attach both `push-reel-stable-release-v0.1.0.apk` and a complete source ZIP
+that contains the pinned Ableton Link and Asio submodules. Keep APKs and signing
+keys out of Git commits. A GitHub tag alone provides a source snapshot, not an
+installable APK download; GitHub's generated source archive does not substitute
+for a source package containing the submodules. Mark this build as a
+**pre-release** if publishing it for others to try before the release-path Link
+Audio recording check is complete.
 
-Release notes should identify the tested device, what the release build was
-actually checked to do, and how to fetch complete source with the Ableton Link
-submodule:
+Release notes should identify what the release build was actually checked to
+do, link to [licensing and disclaimer](LICENSING.md), and explain how to fetch
+complete source with the Ableton Link submodule:
 
 ```powershell
 git clone --branch v0.1.0 --recurse-submodules https://github.com/synya/PushReel.git
 ```
 
-GitHub creates source archives automatically for a tag, but a recursive clone
-is the documented way to obtain the pinned Link submodule. Keep the Apache and
-Ableton Link license notices available alongside the source. Do not describe
-the root Apache license as covering the combined APK on its own.
+GitHub creates source archives automatically for a tag, but those archives do
+not contain submodule content. Use the attached complete source ZIP or a
+recursive clone. Keep the Apache, Ableton Link, and Asio notices available
+alongside the source.

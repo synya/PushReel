@@ -39,8 +39,9 @@ for this exact release build has not been explicitly reported.
   checked independently of the recording path.
 - Exercise background/foreground lifecycle on a physical phone if that workflow
   becomes important. A separate lifecycle result has not been reported.
-- Review third-party licenses and source-delivery obligations before distributing
-  an APK beyond the current direct-install test.
+- Publish the GPLv3 license text, component notices, and corresponding source
+  alongside the first APK release. Complete a full Link Audio recording check
+  on the signed release build when Push 3 is available.
 
 Phone UI actions belong to the device owner. Debug APK installation uses only
 `scripts/install-debug-owner.ps1` for Android `userId 0`; see [AGENTS.md](../AGENTS.md).
