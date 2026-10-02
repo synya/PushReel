@@ -12,6 +12,13 @@ release APK was installed on the phone and passed startup and basic operation
 checks. A separate full Link Audio recording with that exact release APK has
 not been documented.
 
+## Demo
+
+Recorded entirely with PushReel: phone camera video with stereo audio
+received wirelessly from Ableton Push 3 over Link Audio.
+
+https://github.com/user-attachments/assets/af53930e-9a9c-4f37-8d57-fbef05ff7468
+
 ## Use
 
 1. Put the phone and Push 3 on the same Wi-Fi network and enable Link Audio for
