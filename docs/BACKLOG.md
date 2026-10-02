@@ -1,6 +1,6 @@
 # PushReel backlog
 
-Last reviewed: 2026-09-30. This file records agreed product work and its verification state.
+Last reviewed: 2026-10-02. This file records agreed product work and its verification state.
 
 ## Working baseline and pending device evidence
 
@@ -11,16 +11,12 @@ Last reviewed: 2026-09-30. This file records agreed product work and its verific
 - The user tested Push 3 SA and reports video with sound and no perceptible delay.
   Do not change synchronization solely from the many-second stale Link metadata
   seen earlier: that value is not the physical network/audio delay.
-- Several Push 3 SA recordings ended with an error after Stop. Errors then recurred
-  on later attempts until the app was restarted; their old Logcat evidence is
-  unavailable. The next Push 3 SA test recorded several good MP4s without audible
-  A/V offset. Two deliberate Link Audio disconnects failed because a disappearing
-  selected channel invalidated the PCM reader; the recording coroutine then cancelled
-  the muxer and deleted an otherwise valid capture. A later recording succeeded without
-  restarting the app. Per-attempt evidence is in Downloads/PushReel on the phone.
-- Preserve successful MP4 recording while making usability changes. Longer recordings,
-  Gallery playback, mid-recording disconnect, and background/foreground behavior still
-  need explicit device verification.
+- Earlier Push 3 SA tests exposed failures after Stop and on deliberate Link Audio
+  disconnects. Those failures led to debug attempt logs, graceful source-loss
+  finalization, and automatic channel rediscovery. On 2026-10-02 the user reported
+  that all requested Push 3 SA regression checks passed, with no remaining remarks.
+  This includes the previously pending source-loss and rediscovery checks; the
+  signed release build still needs its own on-device verification.
 - The user performs all phone UI actions. Codex may build/install with
   `scripts/install-debug-owner.ps1` and read device diagnostics; see `AGENTS.md`.
 
@@ -47,15 +43,17 @@ Last reviewed: 2026-09-30. This file records agreed product work and its verific
    Fixed green/yellow/red bands replace recoloring an entire bar. The debug APK was
    built and installed for Android `userId 0`. The user confirmed no blinking with
    Push 3 SA but found the motion slightly too slow. The visual fall time has been
-   shortened from 300 to 180 ms; recheck after the next install.
+   shortened from 300 to 180 ms. The user reported that all subsequent Push 3 SA
+   checks passed with no remarks.
 
 1a. **Persist debug recording diagnostics.** One bounded text file per Link recording
     is now written to `Downloads/PushReel` in debug builds. It includes start, source
     format, audio/video and muxer milestones, stop, counters, video-output state, and
     the full failure stack. File I/O runs on an IO worker; logging failures do not
     affect recording. Files remain visible after a failed or interrupted capture.
-    Unit tests and debug APK build passed; verify file creation and contents on the
-    phone during the next Push 3 SA recording test.
+    Unit tests and debug APK build passed. The files captured the deliberate Link
+    loss during the prior device test; the user reports that subsequent regression
+    checks passed.
 
 2. **Remember the last Photo/Video mode.** Reuse the existing DataStore settings
    architecture. Persist the user's mode choice, restore it on relaunch, and keep the
@@ -89,8 +87,9 @@ Last reviewed: 2026-09-30. This file records agreed product work and its verific
    than publishing an invalid file. The Link controller retries native discovery
    after an empty channel list, waiting for both disable and enable acknowledgements
    so actor command coalescing cannot skip a restart. It leaves channel selection to
-   the user. Focused tests and debug APK build pass; both paths require another Push
-   device test.
+   the user. Focused tests and debug APK build passed. The user completed the
+   requested Push 3 SA disconnect, saved-MP4, rediscovery, and follow-up recording
+   checks on 2026-10-02 and reported that all passed without remarks.
 
 5. **Replace the inherited launcher icon.** The proposed direction is one minimal
    record mark with two stereo bars on a dark background. Have the UI Designer prepare
@@ -99,7 +98,7 @@ Last reviewed: 2026-09-30. This file records agreed product work and its verific
    legacy raster assets consistently; check safe-zone clipping and legibility on the
    physical phone. **Status:** the selected dark stereo-bars/record-mark design now
    replaces adaptive, monochrome, legacy density, and Play Store assets. Raster sizes
-   and adaptive safe zone were checked; launcher appearance awaits a phone check.
+   and adaptive safe zone were checked. The user confirmed the new icon on the phone.
 
 6. **Prepare an installable release build before distribution.** The `release` build
    type and R8 minification already exist; do not add an `internal` flavor by default.
@@ -110,12 +109,14 @@ Last reviewed: 2026-09-30. This file records agreed product work and its verific
    native symbol packaging, versionCode/versionName, third-party license notices,
    CameraX/JNI behavior under R8, and a complete Link Audio recording in release.
    **Status:** resource shrinking, JNI preservation, debug-only profileability and
-   launch diagnostics, and optional environment-based signing are configured. A
-   clean `stableRelease` build passed R8 and lint; APK manifest inspection confirmed
-   that profileability is absent from release. The unsigned APK cannot be installed
-   and runtime behavior remains unverified. Current version
-   values remain `1` / `0.1.0`; choose distribution version and signing key before
-   release. Native timing INFO logs are now debug-only; release retains WARN/ERROR.
+   launch diagnostics, and environment-based signing are configured. A clean
+   `stableRelease` build passed R8 and lint; APK manifest inspection confirmed that
+   profileability is absent from release. A dedicated local signing identity has
+   been created for the first directly installable APK, version `1` / `0.1.0`.
+   The signed `stableRelease` build, R8, resource shrinking, and vital lint passed
+   on 2026-10-02; APK signature verification passed. Native timing INFO logs are
+   debug-only; release retains WARN/ERROR. The signed release still requires a
+   physical-device smoke test after the user installs it.
 
 ## Deferred or already covered
 
@@ -136,8 +137,7 @@ Last reviewed: 2026-09-30. This file records agreed product work and its verific
 
 ## Recommended sequence
 
-The peak meter, mode persistence, screen-awake behavior, icon, and initial release
-configuration are implemented. Next, use the debug files from a Push 3 SA recording
-session to investigate any Stop errors and test mid-recording disconnect handling.
-Then verify a signed, minified release on the phone before distribution. Revisit
-synchronization only if a future Push 3 test reveals a measurable offset.
+The peak meter, mode persistence, screen-awake behavior, icon, and Link disconnect
+recovery are implemented and have passed the user's latest Push 3 SA checks. Next,
+install and verify the signed, minified release on the phone before distribution.
+Revisit synchronization only if a future Push 3 test reveals a measurable offset.

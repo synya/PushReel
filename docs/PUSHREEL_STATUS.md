@@ -128,18 +128,19 @@ rediscovery is built and covered by focused host tests. Source loss after usable
 now ends AAC and publishes the MP4; loss before usable audio remains an error. Link
 discovery retries after previously visible channels vanish, while the user chooses
 the returned channel. The controller waits for native disable and enable
-acknowledgements, including delayed responses. Both behaviors require another Push 3
-SA test. The updated debug APK was installed with `scripts/install-debug-owner.ps1`
-only for Android `userId 0`; `MainActivity` resumed and filtered startup Logcat had
-no errors. The user will perform the Push 3 SA regression test later. A signed release recording
-remains a separate distribution gate. Release signing and build steps are documented
+acknowledgements, including delayed responses. The updated debug APK was installed
+with `scripts/install-debug-owner.ps1` only for Android `userId 0`; `MainActivity`
+resumed and filtered startup Logcat had no errors. On 2026-10-02 the user reported
+that all requested Push 3 SA regression checks passed, including the previously
+pending source-loss and channel-rediscovery checks, with no remarks. A signed
+release recording remains a separate distribution gate. Release signing and build steps are documented
 in [RELEASE.md](RELEASE.md).
 
 The first Push 3 SA test did not reveal a perceptible offset. If a later offset is
 audible or visible, use that result to design a bounded correction for network/playout latency;
 do not assume the earlier multi-second stale metadata value is the physical A/V delay.
-Longer recordings, Gallery playback, disconnect behavior, and background/foreground
-lifecycle remain to verify.
+The user's latest Push 3 SA checks passed. Background/foreground lifecycle and the
+release build remain separate verification items.
 
 ## Verification
 
@@ -219,9 +220,17 @@ root was rechecked. Current PushReel MP4s remain in `DCIM/Camera`, and debug att
 logs remain in `Download/PushReel`. Current app paths do not write to shared-storage
 root. `AGENTS.md` now prohibits putting development diagnostics there.
 
-Still to verify manually: measured Push 3 pad-hit A/V offset, sustained recording,
-Link lifecycle across background/foreground transitions, disconnect behavior, and
-Gallery playback after custom finalization.
+On 2026-10-02, the user reported that all requested Push 3 SA checks passed with
+no remarks. This closes the pending debug-build regression check for Link source
+loss and channel rediscovery. A signed release needs its own installation, camera,
+Link discovery, recording, and Gallery playback check. Background/foreground
+lifecycle has not been separately reported as tested.
+
+The signed `stableRelease` APK, version `1` / `0.1.0`, was built on 2026-10-02.
+R8, resource shrinking, and vital lint completed successfully. Android APK
+signature verification passed with the dedicated PushReel release key, and the
+manifest reports `com.pushreel.app`. The user will install and test this release;
+the build and signature checks do not establish release runtime behavior.
 
 On the tested Samsung phone, use `./scripts/install-debug-owner.ps1` for deployment
 to its main profile (`userId 0`). It passes `--user 0` to ADB and verifies that no
