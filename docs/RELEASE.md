@@ -5,7 +5,19 @@ removes verbose Kotlin and native Link timing diagnostics, retains WARN/ERROR lo
 and excludes debug-only profileability and launch diagnostics. Link JNI entry points
 are retained by `app/proguard-rules.pro`.
 
-To sign the release APK, set all four environment variables in the build process:
+The local release command signs the APK and copies it to a file whose name includes
+the application version:
+
+```powershell
+.\scripts\build-release-local.ps1
+```
+
+The command reads the existing local signing identity below. Run it from the same
+Windows account that created the protected password. For an offline build, pass
+`-Offline`. The result is currently
+`app/build/outputs/apk/stable/release/push-reel-stable-release-v0.1.0.apk`.
+
+For other build environments, set all four environment variables in the build process:
 
 | Variable | Meaning |
 | --- | --- |
@@ -26,24 +38,10 @@ keystore **and a recoverable password** securely before relying on it for future
 releases: the DPAPI file alone cannot be decrypted after losing this Windows account.
 Never copy either file into the Git repository or publish the password.
 
-The local build can load the password in the same Windows account without printing it:
-
-```powershell
-$signingDir = Join-Path $env:LOCALAPPDATA 'PushReel\signing'
-$env:PUSHREEL_RELEASE_STORE_FILE = Join-Path $signingDir 'pushreel-release.p12'
-$env:PUSHREEL_RELEASE_KEY_ALIAS = 'pushreel'
-$protected = Get-Content -LiteralPath (Join-Path $signingDir 'release-password.dpapi') -Raw | ConvertTo-SecureString
-$password = [System.Net.NetworkCredential]::new('', $protected).Password
-$env:PUSHREEL_RELEASE_STORE_PASSWORD = $password
-$env:PUSHREEL_RELEASE_KEY_PASSWORD = $password
-try {
-    .\gradlew.bat :app:assembleStableRelease
-} finally {
-    Remove-Item Env:PUSHREEL_RELEASE_STORE_PASSWORD, Env:PUSHREEL_RELEASE_KEY_PASSWORD
-}
-```
-
-The output is `app/build/outputs/apk/stable/release/app-stable-release.apk`.
+Gradle's original output is
+`app/build/outputs/apk/stable/release/app-stable-release.apk`; the project command
+uses the generated APK metadata to create the versioned copy only after checking
+its Android signature against the PushReel release certificate.
 The first signed `0.1.0` APK was built on 2026-10-02; R8, resource shrinking,
 vital lint, and Android APK signature verification passed. Its signer certificate
 SHA-256 is `d4a19fddf1001c9d26a3669301ac62d69f2b9d99fd0aa9d7b2bde5c10aaeae5f`.
