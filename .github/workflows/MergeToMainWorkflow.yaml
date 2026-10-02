@@ -1,9 +1,9 @@
-name: Merge To Main
+name: Build Master
 
 on:
   push:
     branches:
-      - main
+      - master
 
 concurrency:
   group: build-${{ github.ref }}
@@ -26,6 +26,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          submodules: recursive
 
       - name: Set up JDK
         uses: actions/setup-java@v5

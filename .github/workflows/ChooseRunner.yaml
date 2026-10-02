@@ -20,10 +20,14 @@ jobs:
     steps:
       - name: Resolve runner from inputs, repo vars, or default
         id: resolve_runner
+        env:
+          FORCED_RUNNER: ${{ inputs.forced_runner }}
+          VARS_RUNNER: ${{ vars.RUNNER }}
         run: |
-          FORCED_RUNNER=${{ inputs.forced_runner }}
-          VARS_RUNNER=${{ vars.RUNNER }}
-          BACKUP_RUNNER="ubuntu-latest"
-          RESOLVED_RUNNER="${FORCED_RUNNER:-${VARS_RUNNER:-$BACKUP_RUNNER}}"
+          RESOLVED_RUNNER="${FORCED_RUNNER:-${VARS_RUNNER:-ubuntu-latest}}"
+          if [[ ! "$RESOLVED_RUNNER" =~ ^[A-Za-z0-9._-]+$ ]]; then
+            echo "Invalid runner label" >&2
+            exit 1
+          fi
           echo "Resolved runner: $RESOLVED_RUNNER"
-          echo "resolved_runner=$RESOLVED_RUNNER" >> $GITHUB_OUTPUT
+          echo "resolved_runner=$RESOLVED_RUNNER" >> "$GITHUB_OUTPUT"

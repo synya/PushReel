@@ -18,3 +18,22 @@
 local.properties
 /.kotlin
 /GEMINI.md
+
+# Local signing identities, credentials, and device diagnostics
+*.jks
+*.keystore
+*.p12
+*.pfx
+*.key
+*.pem
+*.dpapi
+.env
+.env.*
+!.env.example
+*.log
+*.hprof
+
+# Installable artifacts copied outside Gradle build directories
+*.apk
+*.aab
+*.apks

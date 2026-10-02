@@ -15,6 +15,7 @@
  */
 
 val ktlintVersion = "1.2.1"
+val spotlessRatchetRef = System.getenv("PUSHREEL_SPOTLESS_RATCHET_FROM") ?: "origin/master"
 
 initscript {
     val spotlessVersion = "6.25.0"
@@ -33,7 +34,7 @@ rootProject {
         apply<com.diffplug.gradle.spotless.SpotlessPlugin>()
         extensions.configure<com.diffplug.gradle.spotless.SpotlessExtension> {
             // limit format enforcement to just the files changed by this feature branch
-            ratchetFrom("origin/main")
+            ratchetFrom(spotlessRatchetRef)
             kotlin {
                 target("**/*.kt")
                 targetExclude("**/build/**/*.kt")
